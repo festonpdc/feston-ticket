@@ -1,0 +1,35 @@
+{
+  "name": "programita-ticketing-core",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.5.1",
+  "engines": { "node": ">=22.14.0" },
+  "scripts": {
+    "dev": "pnpm --filter @programita/web dev",
+    "build": "pnpm --filter @programita/web build",
+    "start": "pnpm --filter @programita/web start",
+    "typecheck": "pnpm -r typecheck && tsc --noEmit -p tsconfig.json",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/unit",
+    "test:db": "vitest run tests/database",
+    "test:e2e": "playwright test",
+    "test:http": "node tests/http/security.mjs",
+    "db:start": "supabase start",
+    "db:reset": "supabase db reset --local --no-seed",
+    "db:seed": "node scripts/seed-demo.mjs",
+    "db:types": "node scripts/generate-types.mjs"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.3.14",
+    "@playwright/test": "^1.58.0",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.0",
+    "eslint": "^9.39.0",
+    "eslint-config-next": "^16.3.6",
+    "pg": "^8.16.0",
+    "supabase": "^2.75.0",
+    "typescript": "^5.9.0",
+    "vitest": "^4.0.0"
+  }
+}

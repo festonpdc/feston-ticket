@@ -1,0 +1,19 @@
+{
+  "name": "@programita/database",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    "./server": "./src/server.ts",
+    "./admin": "./src/admin.ts",
+    "./types": "./src/database.types.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@supabase/ssr": "^0.8.0",
+    "@supabase/supabase-js": "^2.95.0",
+    "server-only": "^0.0.1"
+  }
+}
