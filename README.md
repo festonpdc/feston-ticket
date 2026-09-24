@@ -1,24 +1,25 @@
-# Programita Ticketing Core
+# Festón Ticket · Programita Ticketing Core
 
-Núcleo reusable multi-organización/multi-evento. Fase 1: foundation, datos,
-seguridad y tests. Sin landing del evento, checkout, proveedores de pago,
+Núcleo reusable multi-organización/multi-evento. Fases 1–2: foundation, datos,
+seguridad y motor transaccional de inventario/reservas. Sin landing del evento, checkout, proveedores de pago,
 emisión automática, scanner ni Manager visual.
 
 ## Arquitectura
 
 ```text
 apps/web/                 Next.js 16 App Router; shell técnico, sin UI de evento
-packages/database/        clientes Supabase server-only y tipos generados
-packages/ticketing/        dinero, totales y estados
+packages/database/        clientes Supabase, comandos server-only y tipos generados
+packages/ticketing/        dinero, totales, estados y helpers de inventario
 packages/security/        validación y criptografía
 packages/ui/              reservado
 packages/payments/        reservado, sin integración
-supabase/migrations/      SQL versionado: dominio, integridad, RLS
+supabase/migrations/      SQL incremental: dominio, integridad, RLS e inventario
 supabase/seeds/demo.sql    DEMO separado, deshabilitado por defecto
 tests/unit/               Vitest
 tests/database/           PostgreSQL embebido + suite Supabase local opcional
 tests/e2e/                Playwright preparado; sin specs de producto todavía
 docs/architecture.md      decisiones y límites
+docs/inventory.md         contratos de reserva, locking y pruebas concurrentes
 ```
 
 ## Setup
@@ -86,6 +87,9 @@ Para la misma suite contra Supabase real local: ejecutar `db:start`, `db:reset`,
 definir `TEST_DATABASE_URL` con la conexión PostgreSQL local administrativa y
 ejecutar `pnpm test:db`. En PowerShell: `$env:TEST_DATABASE_URL = '<conexión local>'`.
 Los fixtures se crean en transacciones y se revierten después de cada test.
+La suite concurrente crea una DB temporal `ticketing_test_<uuid>` con 15 conexiones
+reales y la elimina al finalizar; requiere permiso CREATEDB y roles locales de
+Supabase. No modifica ni recrea la DB indicada en la URL. Ver `docs/inventory.md`.
 Usar una DB local desechable sin los UUID de fixtures; no apuntar a producción.
 Sin esa variable la suite Supabase se informa **skipped**, no aprobada.
 
@@ -102,14 +106,42 @@ organización y, cuando corresponde, evento, orden, tipo de entrada y moneda.
 | owner | Catálogo/clientes CRUD, configuración de su organización, gestión de miembros, lectura operacional/financiera |
 | manager | Catálogo/clientes CRUD y lectura operacional/financiera de su organización; sin gestión de roles/configuración organizacional |
 | door | Su perfil, identificación de su organización y su propia membership. Sin datos operacionales, PII de clientes, finanzas ni hashes de tickets |
-| anon | Sin acceso a tablas privadas |
+| anon | Sin acceso a tablas privadas; solo RPC pública de disponibilidad sin PII |
 
-Incluso owner/manager requieren **futuros comandos server-side autorizados** para
-escribir órdenes, pagos, tickets, check-ins y auditoría. No se expone una vía
-directa para marcar órdenes pagadas o emitir entradas desde el navegador.
-Los permisos administrativos completos son de dominio; estas operaciones no
-tienen implementación de producto en Fase 1. `service_role` es una credencial
-de confianza que omite RLS, jamás debe usarse como cliente general de usuario.
+Owner/manager pueden usar comandos server-only de reserva/cancelación que verifican
+su sesión y membership. No hay endpoints ni server actions públicos nuevos.
+Las RPC de escritura solo admiten `service_role`; ni siquiera ese rol puede ahora
+insertar/actualizar directamente orders/order_items. Las policies de Fase 1 no
+cambian. Pagos, emisión, check-ins y sus UIs siguen pendientes. `service_role`
+omite RLS y jamás debe usarse como cliente general de usuario.
+
+## Inventario y reservas
+
+`reserve_tickets` crea order + items + auditoría en una transacción con precios de
+DB, reserva **15 minutos** y máximo **10 entradas** por orden. Ambos parámetros
+son configurables en `private.inventory_settings` por un administrador de DB.
+No son parámetros aceptados del comprador; OXXO/efectivo no usan esta política.
+
+Capacidad consumida: `paid` + `refunded` + `pending_payment` no vencidas.
+`draft`, `cancelled`, `expired` y pending vencida no consumen. Lock de la fila del
+evento bajo READ COMMITTED serializa las mutaciones, con capacidad por tipo y
+capacidad global del evento. No hay contadores mutables ni cron externo requerido.
+
+La reserva exige `idempotency_key` de 64 caracteres hex aleatorios (256 bits).
+Generarla una vez por intento con `generateIdempotencyKey` y conservarla para
+reintentos. PostgreSQL persiste solo hashes: mismo contexto/key recupera la orden;
+cambio material con la misma key devuelve conflicto `PT409`. Repetir no extiende
+la reserva; la clave no autoriza consultar órdenes ni tickets.
+
+RPCs: `ticket_availability`, `reserve_tickets`, `cancel_reservation`,
+`expire_reservations`, `confirm_reserved_order`. Esta última solo cambia dominio:
+no acredita dinero, registra pagos ni emite tickets. Requiere un caller interno
+confiable; un futuro webhook deberá verificar proveedor/importe/moneda primero.
+
+Disponibilidad pública devuelve únicamente tipo, nombre, precio, moneda, estado,
+cantidad disponible y ventana de venta; drafts no se publican. Inventario exacto,
+privacidad, límites de concurrencia y comandos TypeScript: [docs/inventory.md](docs/inventory.md).
+Idempotencia, audit de archivos, permisos y ownership futuro: [revisión 2B](docs/inventory-hardening.md).
 
 Precios en minor units `bigint`, limitados a enteros seguros de JavaScript.
 Snapshots y totales en DB; una compra no se recalcula desde el catálogo actual.

@@ -253,6 +253,7 @@ total: number;
 reserved_until: string | null;
 created_at: string;
 updated_at: string;
+order_kind: string;
 };
 Insert: {
 id?: string;
@@ -267,6 +268,7 @@ total?: number;
 reserved_until?: string | null;
 created_at?: string;
 updated_at?: string;
+order_kind?: string;
 };
 Update: {
 id?: string;
@@ -281,6 +283,7 @@ total?: number;
 reserved_until?: string | null;
 created_at?: string;
 updated_at?: string;
+order_kind?: string;
 };
 Relationships: [
 { foreignKeyName: "orders_organization_id_event_id_fkey"; columns: ["organization_id","event_id"]; isOneToOne: false; referencedRelation: "events"; referencedColumns: ["organization_id","id"] },
@@ -511,8 +514,14 @@ Relationships: [
 { foreignKeyName: "tickets_organization_id_order_item_id_order_id_event_id_ti_fkey"; columns: ["organization_id","order_item_id","order_id","event_id","ticket_type_id"]; isOneToOne: false; referencedRelation: "order_items"; referencedColumns: ["organization_id","id","order_id","event_id","ticket_type_id"] },
 ];
 };
-}; Views: { [_ in never]: never }; Functions: { [_ in never]: never }; Enums: {
-audit_event_type: "order_created" | "payment_confirmed" | "ticket_issued" | "ticket_redeemed" | "ticket_redeem_attempt" | "ticket_resent" | "complimentary_created" | "ticket_cancelled" | "refund";
+}; Views: { [_ in never]: never }; Functions: {
+cancel_reservation: { Args: { p_organization_id: string; p_order_id: string }; Returns: Json };
+confirm_reserved_order: { Args: { p_organization_id: string; p_order_id: string }; Returns: Json };
+expire_reservations: { Args: { p_before?: string; p_limit?: number }; Returns: number };
+reserve_tickets: { Args: { p_organization_id: string; p_event_id: string; p_customer_id: string; p_items: Json; p_idempotency_key: string }; Returns: Json };
+ticket_availability: { Args: { p_organization_id: string; p_event_id: string }; Returns: { ticket_type_id: string; name: string; price: number; currency: string; status: Database['public']['Enums']['ticket_type_status']; available_quantity: number; sales_open: boolean }[] };
+}; Enums: {
+audit_event_type: "order_created" | "payment_confirmed" | "ticket_issued" | "ticket_redeemed" | "ticket_redeem_attempt" | "ticket_resent" | "complimentary_created" | "ticket_cancelled" | "refund" | "inventory_reserved" | "reservation_expired" | "reservation_cancelled" | "order_confirmed";
 event_status: "draft" | "published" | "sales_closed" | "completed" | "cancelled";
 member_role: "owner" | "manager" | "door";
 order_status: "draft" | "pending_payment" | "paid" | "expired" | "cancelled" | "refunded";

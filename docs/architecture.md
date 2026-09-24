@@ -1,4 +1,4 @@
-# Arquitectura · Fase 1
+# Arquitectura · Fases 1–2
 
 Un monorepo pnpm, una aplicación Next.js 16, una DB PostgreSQL/Supabase.
 Sin microservicios ni compilación separada de librerías. Paquetes internos TypeScript
@@ -18,11 +18,13 @@ Flujo **futuro**: `Event → Order → Payment → Ticket → Check-in`.
 
 **Payments y ticket issuance NO están implementados.** Existen tablas y helpers,
 no checkout, webhooks, confirmación de pagos ni emisión. Tampoco scanner,
-reservas de inventario, emails o WhatsApp. Los estados no ejecutan efectos externos.
+emails o WhatsApp. Fase 2 agrega reservas transaccionales e inventario derivado;
+la transición interna a paid no acredita un pago ni ejecuta efectos externos.
 
 ## Integridad
 
-- UUID aleatorios; códigos ORD/TKT con 128 bits aleatorios, constraint UNIQUE.
+- UUID aleatorios; helpers ORD/TKT con 128 bits aleatorios, constraint UNIQUE.
+  Las reservas SQL generan su código ORD desde UUIDv4 (122 bits aleatorios).
   Futuros escritores reintentarían una colisión única; el test de 10.000 códigos
   por clase comprueba regresiones, no demuestra matemáticamente ausencia de colisiones.
 - FK compuestas evitan referencias cruzadas entre tenants y eventos, incluso
@@ -36,7 +38,9 @@ reservas de inventario, emails o WhatsApp. Los estados no ejecutan efectos exter
   items y actualizar total en una transacción. Salir de draft congela snapshots.
   El trigger de items bloquea la orden para serializar cambios concurrentes.
   Transiciones terminales no vuelven a abrir órdenes; reembolso parcial no está modelado.
-- Capacidad válida >=0; no hay reserva/consumo de inventario implementado.
+- Capacidad válida >=0; consumo derivado de órdenes y bloqueos por evento en
+  READ COMMITTED. Los cambios de capacidad no pueden quedar debajo del consumo.
+  Véase [inventario](inventory.md) para la estrategia y sus límites de verificación.
 - Zonas IANA verificadas, fechas `timestamptz`, orden cronológico y ventanas válidas.
 - UNIQUE(ticket_id) en check-ins prepara un único ingreso exitoso. Los intentos
   fallidos futuros irán a auditoría, no consumirán ese registro único.
@@ -56,8 +60,11 @@ Owner administra catálogo, clientes, miembros y configuración dentro del tenan
 manager opera catálogo/clientes y lee registros financieros; door queda cerrado
 hasta una RPC mínima futura. Perfil solo propio. Ningún cliente autenticado puede
 insertar auditoría o escribir estado financiero directamente. La aplicación
-deberá autenticar, comprobar membership y validar inputs antes de usar cualquier
-cliente que omita RLS. No hay endpoints de escritura implementados todavía.
+autentica y comprueba membership antes de los comandos server-only de reserva y
+cancelación. Las RPCs de escritura solo son ejecutables con service_role;
+confirmación y expiración están en un módulo interno separado. No hay endpoints
+de escritura implementados todavía. La proyección pública de disponibilidad es
+una RPC con campos limitados, sin grants de lectura sobre tablas privadas.
 
 La identidad y tenant de registros son inmutables. No hay borrados en cascada de
 datos operacionales/históricos. El último owner no puede ser removido o degradado;
@@ -80,13 +87,22 @@ completas de proveedor. No se ha creado un logger con datos personales.
 ## Límites y siguiente revisión
 
 Antes de implementar ventas: confirmar ubicación, timezone, horario, moneda,
-precios, capacidades; diseñar reservas concurrentes e idempotencia; RPC autorizadas
+precios, capacidades; ejecutar las pruebas concurrentes preparadas en PostgreSQL local,
+conservar/reutilizar la idempotency_key en la futura experiencia de compra; RPC autorizadas
 para emisión limitada por quantity y check-in atómico (lock/update condicional,
 audit en la misma transacción); validar transiciones de pagos/tickets y callbacks;
-implementar Auth/refresh y tests HTTP/E2E. No hay garantía de emisión/inventario
-ni sincronización check-in/estado hasta implementar esas operaciones.
+implementar Auth/refresh y tests HTTP/E2E. No hay emisión ni sincronización de
+check-in/estado hasta implementar esas operaciones. El inventario tiene protección
+transaccional SQL; su prueba con conexiones reales permanece pendiente si el
+entorno solo dispone de PGlite.
 
 PGlite ejecuta PostgreSQL real pero no todo Supabase: el límite Auth se configura
 en fixtures y no se prueba PostgREST, GoTrue, sesiones reales ni concurrencia entre
 conexiones. La misma suite SQL está disponible contra Supabase local. No equivale
 a afirmar que se validó el despliegue Supabase sin Docker.
+
+Fase 2B incorpora deduplicación persistida en tabla privada: hash SHA-256 de la
+clave, hash del contexto normalizado y order_id único. No hay cuentas ni permisos
+públicos sobre órdenes. Acceso futuro de compradores mediante capacidades
+temporales por orden/magic link, separadas de idempotencia y del token de ingreso.
+Véase [hardening](inventory-hardening.md).

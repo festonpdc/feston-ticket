@@ -227,6 +227,12 @@ importers:
 
   packages/database:
     dependencies:
+      '@programita/security':
+        specifier: workspace:*
+        version: link:../security
+      '@programita/ticketing':
+        specifier: workspace:*
+        version: link:../ticketing
       '@supabase/ssr':
         specifier: ^0.8.0
         version: 0.8.0(@supabase/supabase-js@2.117.0)

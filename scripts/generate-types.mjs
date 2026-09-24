@@ -38,7 +38,25 @@ try {
     }
     out += '];\n};\n';
   }
-  out += '}; Views: { [_ in never]: never }; Functions: { [_ in never]: never }; Enums: {\n';
+  out += '}; Views: { [_ in never]: never }; Functions: {\n';
+  const { rows: functions } = await db.query(`select p.proname, p.proargnames, p.proargmodes,
+    p.pronargdefaults, p.proretset, rt.typname as result_type,
+    array(select t.typname from unnest(coalesce(p.proallargtypes,p.proargtypes::oid[])) with ordinality a(oid,ord)
+      join pg_type t on t.oid=a.oid order by a.ord) as arg_types
+    from pg_proc p join pg_namespace n on n.oid=p.pronamespace join pg_type rt on rt.oid=p.prorettype
+    where n.nspname='public' order by p.proname`);
+  const pgType = name => enumMap[name] ? `Database['public']['Enums']['${name}']`
+    : ['int4','int8','numeric','minor_units'].includes(name) ? 'number'
+    : name === 'bool' ? 'boolean' : name === 'jsonb' ? 'Json' : 'string';
+  for (const fn of functions) {
+    const args = fn.proargnames.map((name, i) => ({ name, mode: fn.proargmodes?.[i] ?? 'i', type: pgType(fn.arg_types[i]) }));
+    const inputs = args.filter(a => a.mode === 'i');
+    const outputs = args.filter(a => a.mode === 't' || a.mode === 'o');
+    out += `${fn.proname}: { Args: { ${inputs.map((a,i) => `${a.name}${i >= inputs.length-fn.pronargdefaults ? '?' : ''}: ${a.type}`).join('; ')} }; Returns: `;
+    out += outputs.length ? `{ ${outputs.map(a => `${a.name}: ${a.type}`).join('; ')} }${fn.proretset ? '[]' : ''}` : pgType(fn.result_type);
+    out += ' };\n';
+  }
+  out += '}; Enums: {\n';
   for(const [name, values] of Object.entries(enumMap)) out += `${name}: ${values.map(v => JSON.stringify(v.enumlabel)).join(' | ')};\n`;
   out += '}; CompositeTypes: { [_ in never]: never }; }; };\n';
   await writeFile('packages/database/src/database.types.ts', out);

@@ -1,4 +1,8 @@
 export const memberRoles = ['owner', 'manager', 'door'] as const;
+export function idempotencyKey(value: unknown): string {
+  if (typeof value !== 'string' || !/^[a-f0-9]{64}$/.test(value)) throw new Error('Invalid idempotency key');
+  return value;
+}
 export type MemberRole = typeof memberRoles[number];
 export function memberRole(value: unknown): MemberRole {
   if (typeof value !== 'string' || !memberRoles.includes(value as MemberRole)) throw new Error('Invalid role');

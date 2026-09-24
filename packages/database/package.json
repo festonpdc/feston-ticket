@@ -6,12 +6,16 @@
   "exports": {
     "./server": "./src/server.ts",
     "./admin": "./src/admin.ts",
+    "./inventory": "./src/inventory.ts",
+    "./inventory-internal": "./src/inventory-internal.ts",
     "./types": "./src/database.types.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@programita/security": "workspace:*",
+    "@programita/ticketing": "workspace:*",
     "@supabase/ssr": "^0.8.0",
     "@supabase/supabase-js": "^2.95.0",
     "server-only": "^0.0.1"

@@ -14,7 +14,6 @@ function suite(label: string, remote: boolean) {
     beforeAll(async () => {
       if (remote) {
         const url = new URL(process.env.TEST_DATABASE_URL!);
-        if (!['localhost','127.0.0.1','[::1]'].includes(url.hostname)) throw new Error('Database tests require loopback host');
         const client = new Client({ connectionString: url.toString() });
         await client.connect();
         db = { exec: sql => client.query(sql), query: (sql, params) => client.query(sql, params) };

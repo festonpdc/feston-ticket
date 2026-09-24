@@ -1,4 +1,9 @@
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
+// Create once per purchase attempt; callers must persist/reuse it across retries.
+// This identifies a request. It never authorizes access to an order.
+export function generateIdempotencyKey(): string {
+  return randomBytes(32).toString('hex');
+}
 export function publicCode(kind: 'order' | 'ticket'): string {
   return `${kind === 'order' ? 'ORD' : 'TKT'}_${randomBytes(16).toString('hex')}`;
 }
