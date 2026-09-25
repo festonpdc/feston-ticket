@@ -5,6 +5,7 @@ const paymentElement = readFileSync('apps/web/app/fiesta-de-disfraces/payment-el
 const tickets = readFileSync('apps/web/app/fiesta-de-disfraces/tickets.tsx', 'utf8');
 const createRoute = readFileSync('apps/web/app/api/payments/create/route.ts', 'utf8');
 const statusRoute = readFileSync('apps/web/app/api/payments/status/route.ts', 'utf8');
+const paymentState = readFileSync('apps/web/app/fiesta-de-disfraces/payment-state.ts', 'utf8');
 
 describe('Stripe card checkout contract', () => {
   it('uses official Elements in card-only mode and confirms through Stripe', () => {
@@ -33,13 +34,14 @@ describe('Stripe card checkout contract', () => {
   });
   it('protects create and status with the reservation capability', () => {
     expect(createRoute).toContain('verifyPaymentCapability');
-    expect(statusRoute).toContain('verifyPaymentCapability');
+    expect(statusRoute).toContain('verifyPaymentStatusCapability');
     expect(tickets).toContain("sessionStorage.setItem('feston-payment-session'");
     expect(tickets).not.toMatch(/sessionStorage\.setItem\([^\n]*clientSecret/);
   });
   it('polls authoritative status and renders paid only from the server result', () => {
     expect(tickets).toContain("fetch('/api/payments/status'");
-    expect(tickets).toContain("result.order_status==='paid'&&result.payment_status==='paid'");
+    expect(tickets).toContain('paymentViewFromStatus(result)');
+    expect(paymentState).toContain("result.order_status === 'paid' && result.payment_status === 'paid'");
     expect(tickets).toContain('PAGO CONFIRMADO');
   });
 });
