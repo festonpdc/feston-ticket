@@ -17,6 +17,15 @@ export class StripePaymentProvider implements PaymentProvider {
     const voucher = input.method === 'oxxo' && intent.next_action?.type === 'oxxo_display_details' ? { expiresAt: intent.next_action.oxxo_display_details?.expires_after ? new Date(intent.next_action.oxxo_display_details.expires_after * 1000).toISOString() : null, hostedVoucherUrl: intent.next_action.oxxo_display_details?.hosted_voucher_url ?? null } : undefined;
     return { providerPaymentId: intent.id, status: mapStripeStatus(intent.status, input.method), clientSecret: intent.client_secret, ...(voucher ? { voucher } : {}) };
   }
+  async retrievePaymentIntent(providerPaymentId: string): Promise<PaymentIntentResult> {
+    const intent = await this.stripe.paymentIntents.retrieve(providerPaymentId);
+    const method: PaymentMethod = intent.payment_method_types.includes('oxxo') ? 'oxxo' : 'card';
+    return {
+      providerPaymentId: intent.id,
+      status: mapStripeStatus(intent.status, method),
+      clientSecret: intent.client_secret,
+    };
+  }
   verifyWebhook(payload: string | Buffer, signature: string): Stripe.Event { if (!this.webhookSecret) throw new Error('Stripe webhook environment is not configured'); return this.stripe.webhooks.constructEvent(payload, signature, this.webhookSecret); }
 }
 export { mapStripeStatus };

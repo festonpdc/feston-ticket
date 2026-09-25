@@ -143,6 +143,16 @@ function suite(label: string, remote: boolean) {
       const { rows } = await db.query("select enumlabel from pg_enum e join pg_type t on t.oid=e.enumtypid where t.typname='payment_status' order by enumsortorder");
       expect(rows.map(r => r.enumlabel)).toEqual(expect.arrayContaining(['approved', 'paid']));
     });
+    it('exposes a minimal service-only Stripe RPC bridge to the private core', async () => {
+      const { rows } = await db.query("select p.prosecdef,p.proconfig,p.prosrc from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='apply_stripe_payment_event'");
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.prosecdef).toBe(true);
+      expect(rows[0]!.proconfig).toEqual(['search_path=pg_catalog']);
+      expect(String(rows[0]!.prosrc)).toContain('private.apply_stripe_payment_event');
+      expect(String(rows[0]!.prosrc)).not.toContain('update ');
+      const result = await db.query("select public.apply_stripe_payment_event('evt_missing','pi_missing','payment_intent.succeeded',100,'MXN','card') as value");
+      expect(result.rows[0]!.value).toEqual({ status: 'rejected', reason: 'payment_not_found' });
+    });
     it('enforces unique public codes, token hashes and append-only audit', async () => {
       await rejected(`update public.tickets set public_code='TKT_${'1'.padStart(32,'0')}' where id='${id(8,2)}'`, '23505');
       await rejected(`update public.tickets set secure_token_hash='${'1'.padStart(64,'0')}' where id='${id(8,2)}'`, '23505');

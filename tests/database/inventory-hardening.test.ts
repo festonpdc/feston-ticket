@@ -122,7 +122,7 @@ function suite(name:string,url?:string) {
     it.each(['','short','A'.repeat(64),'a'.repeat(63),'a'.repeat(65)])('rejects invalid key format %s',async invalid=>{
       await reject(()=>reserve(db,f,1,undefined,invalid),'22023');
     });
-    it('has only five public RPCs with fixed search_path and minimal grants',async()=>{
+    it('has only the approved public RPCs with fixed search_path and minimal grants',async()=>{
       const protection=(await db.query("select relrowsecurity,relforcerowsecurity from pg_class where oid='private.reservation_requests'::regclass")).rows[0]!;
       expect(protection).toEqual({relrowsecurity:true,relforcerowsecurity:true});
       const rows=(await db.query(`select p.proname,p.prosecdef,p.proconfig,
@@ -132,9 +132,10 @@ function suite(name:string,url?:string) {
         has_function_privilege('service_role',p.oid,'execute') as service,
         exists(select 1 from aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) where grantee=0 and privilege_type='EXECUTE') as public_execute
         from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' order by p.proname`)).rows;
-      expect(rows.map(r=>r.proname)).toEqual(['cancel_reservation','confirm_reserved_order','expire_reservations','reserve_tickets','ticket_availability']);
+      expect(rows.map(r=>r.proname)).toEqual(['apply_stripe_payment_event','cancel_reservation','confirm_reserved_order','expire_reservations','reserve_tickets','ticket_availability']);
       for(const fn of rows) {
-        expect(fn.prosecdef).toBe(true);expect(fn.proconfig).toContain('search_path=""');
+        expect(fn.prosecdef).toBe(true);
+        expect(fn.proconfig).toContain(fn.proname==='apply_stripe_payment_event'?'search_path=pg_catalog':'search_path=""');
         expect(['anon','authenticated','service_role']).not.toContain(fn.owner);
         expect(fn.anon).toBe(fn.proname==='ticket_availability');
         expect(fn.authenticated).toBe(fn.proname==='ticket_availability');
