@@ -49,7 +49,7 @@ function suite(label: string, remote: boolean) {
     async function paymentId() {
       const { rows } = await db.query(`select id from public.payments where organization_id='${id(1)}' and order_id='${id(6)}'`);
       expect(rows).toHaveLength(1);
-      return rows[0].id as string;
+      return rows[0]!.id as string;
     }
     it('enables and forces RLS on all 13 private tables', async () => {
       const { rows } = await db.query("select relname,relrowsecurity,relforcerowsecurity from pg_class join pg_namespace n on n.oid=relnamespace where n.nspname='public' and relkind='r'");
