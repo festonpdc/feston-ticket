@@ -29,3 +29,10 @@ scoped to the organization/order and valid for one year from order creation.
 It is read-only, works across devices, cannot authorize payment operations, and
 can be rotated globally through `TICKET_QR_SECRET`. The capability route reads
 only the paid order and its tickets and performs no check-in or mutation.
+
+The operator command `pnpm send-order-tickets-email` is dry-run by default and
+targets exactly one organization/order supplied by flags or the ignored local
+operator environment. It prints only a masked recipient and non-sensitive
+state. A real provider call requires the explicit `--send` flag. The command
+delegates to `sendOrderTicketsEmail`; it does not accept a recipient override
+and does not expose an HTTP endpoint.

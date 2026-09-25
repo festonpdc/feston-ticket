@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@12.5.1",
-  "engines": { "node": ">=22.14.0" },
+  "engines": {
+    "node": ">=22.14.0"
+  },
   "scripts": {
     "dev": "pnpm --filter @programita/web dev",
     "build": "pnpm --filter @programita/web build",
@@ -18,7 +20,8 @@
     "db:start": "supabase start",
     "db:reset": "supabase db reset --local --no-seed",
     "db:seed": "node scripts/seed-demo.mjs",
-    "db:types": "node scripts/generate-types.mjs"
+    "db:types": "node scripts/generate-types.mjs",
+    "send-order-tickets-email": "tsx --conditions=react-server scripts/send-order-tickets-email.ts"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.3.14",
@@ -29,6 +32,7 @@
     "eslint-config-next": "^16.3.6",
     "pg": "^8.16.0",
     "supabase": "^2.75.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.0",
     "vitest": "^4.0.0"
   }
