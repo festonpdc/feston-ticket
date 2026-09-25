@@ -1,6 +1,7 @@
 import {pathToFileURL} from 'node:url';
 import {resolve} from 'node:path';
-import {loadEnvConfig} from '@next/env';
+import {createRequire} from 'node:module';
+const {loadEnvConfig}=createRequire(import.meta.url)('@next/env') as typeof import('@next/env');
 
 type Options={organizationId:string;orderId:string;send:boolean};
 type Summary={organizationId:string;orderPublicCode:string;orderStatus:string;paymentStatus:string;ticketCount:number;ticketTypes:string[];destination:string;deliveryStatus:string};
