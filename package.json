@@ -25,6 +25,7 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.3.14",
+    "@next/env": "16.3.6",
     "@playwright/test": "^1.58.0",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.15.0",

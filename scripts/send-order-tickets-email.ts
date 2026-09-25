@@ -1,7 +1,6 @@
-import {readFileSync} from 'node:fs';
 import {pathToFileURL} from 'node:url';
-import {createAdminClient} from '../packages/database/src/admin';
-import {sendOrderTicketsEmail} from '../apps/web/lib/order-ticket-email';
+import {resolve} from 'node:path';
+import {loadEnvConfig} from '@next/env';
 
 type Options={organizationId:string;orderId:string;send:boolean};
 type Summary={organizationId:string;orderPublicCode:string;orderStatus:string;paymentStatus:string;ticketCount:number;ticketTypes:string[];destination:string;deliveryStatus:string};
@@ -23,11 +22,13 @@ export async function runOperatorCommand(args:string[],deps:Dependencies){
   const result=await deps.send(options.organizationId,options.orderId);deps.log(`Result: ${result.status}`);return result;
 }
 async function inspect(organizationId:string,orderId:string):Promise<Summary>{
+  const {createAdminClient}=await import('../packages/database/src/admin');
   const db=createAdminClient();const order=await db.from('orders').select('public_code,status,customer_id,event_id').eq('organization_id',organizationId).eq('id',orderId).maybeSingle();if(order.error||!order.data)throw new Error('Order not found');
   const[customer,payments,items,tickets,delivery]=await Promise.all([db.from('customers').select('email').eq('organization_id',organizationId).eq('id',order.data.customer_id).maybeSingle(),db.from('payments').select('status').eq('organization_id',organizationId).eq('order_id',orderId),db.from('order_items').select('ticket_type_id,quantity').eq('organization_id',organizationId).eq('order_id',orderId),db.from('tickets').select('id').eq('organization_id',organizationId).eq('order_id',orderId),db.from('deliveries' as never).select('status').eq('organization_id',organizationId).eq('order_id',orderId).eq('channel','email').eq('purpose','tickets_initial').eq('sequence',1).maybeSingle()]);
   if(customer.error||!customer.data||payments.error||items.error||tickets.error)throw new Error('Order summary unavailable');const types=await db.from('ticket_types').select('id,name').eq('organization_id',organizationId).eq('event_id',order.data.event_id);if(types.error)throw new Error('Order summary unavailable');const names=new Map((types.data??[]).map(type=>[type.id,type.name]));
   return {organizationId,orderPublicCode:order.data.public_code,orderStatus:order.data.status,paymentStatus:[...new Set((payments.data??[]).map(payment=>payment.status))].join(','),ticketCount:tickets.data?.length??0,ticketTypes:(items.data??[]).map(item=>`${item.quantity} ${names.get(item.ticket_type_id)??'ENTRADA'}`),destination:customer.data.email,deliveryStatus:(delivery.data as {status?:string}|null)?.status??'none'};
 }
-function loadLocalEnv(){const path='apps/web/.env.local';for(const line of readFileSync(path,'utf8').split(/\r?\n/)){const match=line.match(/^([A-Z0-9_]+)=(.*)$/);const name=match?.[1],value=match?.[2];if(name&&value!==undefined&&!process.env[name])process.env[name]=value}}
-async function main(){loadLocalEnv();if(!process.env.STRIPE_SECRET_KEY?.startsWith('sk_test_'))throw new Error('Operator command is restricted to the current Stripe TEST environment');await runOperatorCommand(process.argv.slice(2),{inspect,send:sendOrderTicketsEmail,log:console.log})}
+const requiredEnvironment=['NEXT_PUBLIC_SUPABASE_URL','SUPABASE_SERVICE_ROLE_KEY','RESEND_API_KEY','EMAIL_FROM','EMAIL_REPLY_TO','APP_URL','TICKET_QR_SECRET'] as const;
+export function loadWebEnvironment(directory=resolve(process.cwd(),'apps/web')){loadEnvConfig(directory,true,{info:()=>{},error:()=>{}},true);const missing=requiredEnvironment.filter(name=>!process.env[name]);if(missing.length)throw new Error(`Missing required web environment: ${missing.join(', ')}`);return {present:requiredEnvironment.length}}
+async function main(){loadWebEnvironment();if(!process.env.STRIPE_SECRET_KEY?.startsWith('sk_test_'))throw new Error('Operator command is restricted to the current Stripe TEST environment');const {sendOrderTicketsEmail}=await import('../apps/web/lib/order-ticket-email');await runOperatorCommand(process.argv.slice(2),{inspect,send:sendOrderTicketsEmail,log:console.log})}
 if(import.meta.url===pathToFileURL(process.argv[1]??'').href)main().catch(error=>{console.error(error instanceof Error?error.message:'Operator command failed');process.exitCode=1});
