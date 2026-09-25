@@ -30,12 +30,12 @@ insert into public.customers(id,organization_id,full_name,email)
  select ('50000000-0000-4000-8000-00000000000' || n)::uuid,
  ('10000000-0000-4000-8000-00000000000' || n)::uuid,
  'Test customer', 'fixture@example.invalid' from generate_series(1,2) n;
-insert into public.orders(id,organization_id,event_id,customer_id,public_code,currency)
+insert into public.orders(id,organization_id,event_id,customer_id,public_code,currency,subtotal,total)
  select ('60000000-0000-4000-8000-00000000000' || n)::uuid,
  ('10000000-0000-4000-8000-00000000000' || n)::uuid,
  ('30000000-0000-4000-8000-00000000000' || n)::uuid,
  ('50000000-0000-4000-8000-00000000000' || n)::uuid,
- 'ORD_' || lpad(n::text,32,'0'), 'USD' from generate_series(1,2) n;
+ 'ORD_' || lpad(n::text,32,'0'), 'USD',1500,1500 from generate_series(1,2) n;
 insert into public.order_items(id,organization_id,order_id,event_id,ticket_type_id,currency,quantity,unit_price,subtotal)
  select ('70000000-0000-4000-8000-00000000000' || n)::uuid,
  ('10000000-0000-4000-8000-00000000000' || n)::uuid,
@@ -43,11 +43,10 @@ insert into public.order_items(id,organization_id,order_id,event_id,ticket_type_
  ('30000000-0000-4000-8000-00000000000' || n)::uuid,
  ('40000000-0000-4000-8000-00000000000' || n)::uuid,
  'USD',1,1500,1500 from generate_series(1,2) n;
-update public.orders set subtotal=1500,total=1500;
-update public.orders set status='pending_payment', reserved_until=now()+interval '15 minutes';
-update public.orders set status='paid';
+update public.orders set status='pending_payment', reserved_until=now()+interval '15 minutes' where organization_id in ('10000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000002');
+update public.orders set status='paid' where organization_id in ('10000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000002');
 insert into public.payments(organization_id,order_id,provider,amount,currency,status)
- select organization_id,id,'demo',1500,'USD','approved' from public.orders;
+ select organization_id,id,'demo',1500,'USD','approved' from public.orders where organization_id in ('10000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000002');
 insert into public.tickets(id,organization_id,event_id,order_id,order_item_id,ticket_type_id,public_code,secure_token_hash)
  select ('80000000-0000-4000-8000-00000000000' || n)::uuid,
  ('10000000-0000-4000-8000-00000000000' || n)::uuid,
@@ -57,5 +56,5 @@ insert into public.tickets(id,organization_id,event_id,order_id,order_item_id,ti
  ('40000000-0000-4000-8000-00000000000' || n)::uuid,
  'TKT_' || lpad(n::text,32,'0'), lpad(n::text,64,'0') from generate_series(1,2) n;
 insert into public.audit_logs(organization_id,event_type,entity_type,entity_id)
- select organization_id,'order_created','order',id from public.orders;
+ select organization_id,'order_created','order',id from public.orders where organization_id in ('10000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000002');
 set constraints all immediate;

@@ -1,8 +1,8 @@
 import { orderStatus, quantity } from './index';
 
 export type InventoryState = 'draft' | 'pending_payment' | 'paid' | 'expired' | 'cancelled' | 'refunded';
-export function inventoryBreakdown(capacity: number, orders: readonly { quantity: number; status: InventoryState; reservedUntil: Date | null }[], at: Date) {
-  if (!Number.isSafeInteger(capacity) || capacity < 0 || !Number.isFinite(at.getTime())) throw new Error('Invalid inventory inputs');
+export function inventoryBreakdown(capacity: number | null, orders: readonly { quantity: number; status: InventoryState; reservedUntil: Date | null }[], at: Date) {
+  if ((capacity !== null && (!Number.isSafeInteger(capacity) || capacity < 0)) || !Number.isFinite(at.getTime())) throw new Error('Invalid inventory inputs');
   let sold = 0;
   let reserved = 0;
   for (const order of orders) {
@@ -14,8 +14,8 @@ export function inventoryBreakdown(capacity: number, orders: readonly { quantity
       if (order.reservedUntil > at) reserved += count;
     }
   }
-  if (!Number.isSafeInteger(sold+reserved) || sold+reserved > capacity) throw new Error('Inventory invariant violated');
-  return { capacity, sold, reserved, available: capacity-sold-reserved };
+  if (!Number.isSafeInteger(sold+reserved) || (capacity !== null && sold+reserved > capacity)) throw new Error('Inventory invariant violated');
+  return { capacity, sold, reserved, available: capacity === null ? null : capacity-sold-reserved };
 }
 
 // Shape validation only. Authoritative limits, dates, prices and capacity live in SQL.

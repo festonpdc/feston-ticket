@@ -181,3 +181,6 @@ no sesiones JWT/HTTP de GoTrue/PostgREST. No usar túneles a un servidor remoto.
 Sin TEST_DATABASE_URL, las cuatro pruebas concurrentes y los marcadores de Supabase
 local se reportan skipped. No se declara un resultado de concurrencia real a
 partir de las pruebas secuenciales en PGlite.
+### Capacidad sin límite comercial
+
+Desde la migración `202609250007`, `ticket_types.capacity` puede ser `NULL`. Esto significa que no hay límite comercial configurado para ese tipo; no representa cero ni una capacidad artificial. `ticket_availability.available_quantity` también devuelve `NULL` para ese caso, una representación explícita de ilimitado. Las cantidades vendidas y reservadas continúan calculándose desde `order_items` y las órdenes; la capacidad global del evento permanece independiente.

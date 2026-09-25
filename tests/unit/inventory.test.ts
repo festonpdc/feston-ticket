@@ -27,6 +27,10 @@ describe('Inventory domain calculations (SQL remains authoritative)',()=>{
     expect(()=>inventoryBreakdown(-1,[],at)).toThrow();
     expect(()=>inventoryBreakdown(1,[],new Date('invalid'))).toThrow();
   });
+  it('represents an uncapped ticket type explicitly without dropping accounting',()=>{
+    expect(inventoryBreakdown(null,[{quantity:4,status:'paid',reservedUntil:null},{quantity:2,status:'pending_payment',reservedUntil:future}],at))
+      .toEqual({capacity:null,sold:4,reserved:2,available:null});
+  });
   it('validates shapes without accepting a browser price',()=>{
     expect(reservationItems([{ticket_type_id:type,quantity:2}])).toEqual([{ticket_type_id:type,quantity:2}]);
     for(const value of [[],null,[{}],[{ticket_type_id:type,quantity:0}],[{ticket_type_id:type,quantity:-1}],
@@ -38,9 +42,9 @@ describe('Inventory domain calculations (SQL remains authoritative)',()=>{
     const states:InventoryState[]=['draft','pending_payment','paid','expired','cancelled','refunded'];
     for(const first of states) for(const second of states) for(let a=1;a<=3;a++) for(let b=1;b<=3;b++) {
       const result=inventoryBreakdown(6,[{quantity:a,status:first,reservedUntil:future},{quantity:b,status:second,reservedUntil:expired}],at);
-      expect(result.available).toBeGreaterThanOrEqual(0);
-      expect(result.sold+result.reserved).toBeLessThanOrEqual(result.capacity);
-      expect(result.sold+result.reserved+result.available).toBe(result.capacity);
+      expect(result.available!).toBeGreaterThanOrEqual(0);
+      expect(result.sold+result.reserved).toBeLessThanOrEqual(result.capacity!);
+      expect(result.sold+result.reserved+result.available!).toBe(result.capacity!);
     }
   });
 });

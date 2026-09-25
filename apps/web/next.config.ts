@@ -1,6 +1,7 @@
 import type { NextConfig } from 'next';
 const config: NextConfig = {
   poweredByHeader: false,
+  allowedDevOrigins: ['localhost'],
   transpilePackages: ['@programita/database', '@programita/security'],
   async headers() {
     return [{ source: '/:path*', headers: [

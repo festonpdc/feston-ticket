@@ -1,7 +1,8 @@
-import { PGlite } from '@electric-sql/pglite';
+﻿import { PGlite } from '@electric-sql/pglite';
 import { Client } from 'pg';
 import { readFile, readdir } from 'node:fs/promises';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { assertIsolatedDestructiveTarget } from './remote-guard';
 
 type DB = { exec(sql: string): Promise<unknown>; query(sql: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }> };
 const id = (prefix: number, n = 1) => `${prefix}0000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -13,6 +14,7 @@ function suite(label: string, remote: boolean) {
     let close: () => Promise<void>;
     beforeAll(async () => {
       if (remote) {
+        assertIsolatedDestructiveTarget();
         const url = new URL(process.env.TEST_DATABASE_URL!);
         const client = new Client({ connectionString: url.toString() });
         await client.connect();
@@ -43,6 +45,11 @@ function suite(label: string, remote: boolean) {
       await db.exec('savepoint expected_failure');
       try { await expect(db.exec(sql)).rejects.toMatchObject({ code }); }
       finally { await db.exec('rollback to savepoint expected_failure'); }
+    }
+    async function paymentId() {
+      const { rows } = await db.query(`select id from public.payments where organization_id='${id(1)}' and order_id='${id(6)}'`);
+      expect(rows).toHaveLength(1);
+      return rows[0].id as string;
     }
     it('enables and forces RLS on all 13 private tables', async () => {
       const { rows } = await db.query("select relname,relrowsecurity,relforcerowsecurity from pg_class join pg_namespace n on n.oid=relnamespace where n.nspname='public' and relkind='r'");
@@ -117,31 +124,32 @@ function suite(label: string, remote: boolean) {
       await rejected(`update public.tickets set event_id='${id(3,3)}' where id='${id(8)}'`, '23503');
     });
     it('freezes purchased prices and does not depend on current catalog price', async () => {
-      await db.exec('update public.ticket_types set price=9000');
+      await db.exec(`update public.ticket_types set price=9000 where id='${id(4)}'`);
       expect((await db.query('select unit_price::text from public.order_items')).rows.every(r => r.unit_price === '1500')).toBe(true);
-      await rejected('update public.order_items set unit_price=9000,subtotal=9000');
-      await rejected('update public.orders set subtotal=9000,total=9000');
-      await rejected('update public.payments set amount=9000');
+      await rejected(`update public.order_items set unit_price=9000,subtotal=9000 where id='${id(7)}'`);
+      await rejected(`update public.orders set subtotal=9000,total=9000 where id='${id(6)}'`);
+      await rejected(`update public.payments set amount=9000 where id='${await paymentId()}'`);
     });
     it('enforces totals, currency, capacity, slugs, timezones and chronology', async () => {
-      await rejected('update public.ticket_types set capacity=-1');
-      await rejected("update public.ticket_types set currency='usd'");
-      await rejected("update public.events set slug='Invalid Slug'");
-      await rejected("update public.events set timezone='Not/AZone'");
-      await rejected('update public.events set ends_at=starts_at');
+      await rejected(`update public.ticket_types set capacity=-1 where id='${id(4)}'`);
+      await rejected(`update public.ticket_types set currency='usd' where id='${id(4)}'`);
+      await rejected(`update public.events set slug='Invalid Slug' where id='${id(3)}'`);
+      await rejected(`update public.events set timezone='Not/AZone' where id='${id(3)}'`);
+      await rejected(`update public.events set ends_at=starts_at where id='${id(3)}'`);
       await rejected(`insert into public.orders(organization_id,event_id,customer_id,public_code,currency,subtotal,total) values ('${id(1)}','${id(3)}','${id(5)}','ORD_${'a'.repeat(32)}','USD',99,99)`);
-      await rejected('update public.orders set status=\'draft\'');
+      await rejected(`update public.orders set status='draft' where id='${id(6)}'`);
     });
     it('enforces unique public codes, token hashes and append-only audit', async () => {
       await rejected(`update public.tickets set public_code='TKT_${'1'.padStart(32,'0')}' where id='${id(8,2)}'`, '23505');
       await rejected(`update public.tickets set secure_token_hash='${'1'.padStart(64,'0')}' where id='${id(8,2)}'`, '23505');
-      await rejected("update public.audit_logs set metadata='{}'");
-      await rejected('delete from public.audit_logs');
-      await rejected('truncate public.audit_logs');
+      await rejected(`update public.audit_logs set metadata='{}' where organization_id='${id(1)}' and entity_id='${id(6)}'`);
+      await rejected(`delete from public.audit_logs where organization_id='${id(1)}' and entity_id='${id(6)}'`);
+      await rejected(`truncate public.audit_logs`);
     });
     it('rejects sensitive metadata keys and raw provider payloads', async () => {
-      await rejected(`update public.payments set metadata='{"cvv":"123"}'`);
-      await rejected(`update public.payments set metadata='{"provider_payload":{"card":"123"}}'`);
+      const payment = await paymentId();
+      await rejected(`update public.payments set metadata='{"cvv":"123"}' where id='${payment}'`);
+      await rejected(`update public.payments set metadata='{"provider_payload":{"card":"123"}}' where id='${payment}'`);
     });
     it('permits one check-in per ticket and requires an actor in the same tenant', async () => {
       await db.exec(`insert into public.check_ins(organization_id,event_id,ticket_id,checked_in_by) values ('${id(1)}','${id(3)}','${id(8)}','${id(0,3)}')`);

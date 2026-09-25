@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { localDatabaseUrl, seedInventory, type InventoryDB } from './inventory-support';
+import { assertIsolatedDestructiveTarget } from './remote-guard';
 
 // Opt-in: separate real PostgreSQL connections; never substitute a PGlite queue.
 // The fixture uses unique IDs in the linked database and is removed by the owner
@@ -11,6 +12,7 @@ describe.skipIf(!connection)('Real PostgreSQL inventory concurrency (15 connecti
   let admin: Client; let db: Client; let url: string;
   const adapter = (client: Client): InventoryDB => ({ exec: sql=>client.query(sql), query:(sql,params)=>client.query(sql,params) });
   beforeAll(async () => {
+    assertIsolatedDestructiveTarget();
     const base = localDatabaseUrl(connection!);
     admin = new Client({ connectionString:base.toString() }); await admin.connect();
     url=base.toString(); db=admin;

@@ -1,11 +1,12 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { assertIsolatedDestructiveTarget } from './remote-guard';
 import { availability, historicalOrder, inventoryDB, reserve, seedInventory, type InventoryDB, type InventoryFixture } from './inventory-support';
 
 function suite(name:string,url?:string) {
   describe(name,()=>{
     let db:InventoryDB; let close:()=>Promise<void>; let f:InventoryFixture; let key:string;
-    beforeAll(async()=>{({db,close}=await inventoryDB(url));});
+    beforeAll(async()=>{if(url) assertIsolatedDestructiveTarget();({db,close}=await inventoryDB(url));});
     afterAll(async()=>{if(close)await close();});
     beforeEach(async()=>{await db.exec('begin');f=await seedInventory(db);key=randomBytes(32).toString('hex');});
     afterEach(async()=>{await db.exec('rollback');});

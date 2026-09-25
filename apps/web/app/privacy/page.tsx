@@ -1,0 +1,1 @@
+export default function Privacy(){return <main className="legal-page"><h1>Aviso de privacidad</h1><p>Fest-On utilizará los datos de contacto proporcionados para gestionar reservas y comunicaciones relacionadas con el evento. Los datos legales definitivos y el contacto oficial serán incorporados antes de producción.</p></main>}

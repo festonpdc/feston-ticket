@@ -1,10 +1,11 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { assertIsolatedDestructiveTarget } from './remote-guard';
 import { availability, historicalOrder, inventoryDB, reserve, seedInventory, type InventoryDB, type InventoryFixture } from './inventory-support';
 
 function suite(name: string, url?: string) {
   describe(name, () => {
     let db: InventoryDB; let close: () => Promise<void>; let f: InventoryFixture;
-    beforeAll(async () => { ({ db, close } = await inventoryDB(url)); });
+    beforeAll(async () => { if (url) assertIsolatedDestructiveTarget(); ({ db, close } = await inventoryDB(url)); });
     afterAll(async () => { if (close) await close(); });
     beforeEach(async () => { await db.exec('begin'); f = await seedInventory(db); });
     afterEach(async () => { await db.exec('rollback'); });
@@ -55,11 +56,11 @@ function suite(name: string, url?: string) {
         select organization_id,location_id,'Other','other',starts_at,ends_at,timezone,'published' from public.events where id=$1`,[f.event]);
       const otherEvent = (await db.query("select id from public.events where organization_id=$1 and slug='other'",[f.org])).rows[0]!.id as string;
       await reject(() => reserve(db,{...f,event:otherEvent}), '22023');
-      expect((await db.query('select * from public.orders')).rows).toHaveLength(0);
+      expect((await db.query('select * from public.orders where organization_id=$1',[f.org])).rows).toHaveLength(0);
     });
     it.each([0,-1,11,2147483648,0.5])('rejects invalid or above-default quantity %s atomically', async q => {
       await reject(() => reserve(db,f,q));
-      expect((await db.query('select * from public.orders')).rows).toHaveLength(0);
+      expect((await db.query('select * from public.orders where organization_id=$1',[f.org])).rows).toHaveLength(0);
       expect((await db.query('select * from public.order_items')).rows).toHaveLength(0);
       expect((await db.query('select * from public.audit_logs')).rows).toHaveLength(0);
     });
@@ -114,7 +115,7 @@ function suite(name: string, url?: string) {
     it('sold-out type rejects entire multi-type order without partial writes', async () => {
       await db.query('update public.ticket_types set capacity=0 where id=$1',[f.secondType]);
       await reject(() => reserve(db,f,1,[{ ticket_type_id:f.type,quantity:2 },{ ticket_type_id:f.secondType,quantity:1 }]),'23514');
-      expect((await db.query('select * from public.orders')).rows).toHaveLength(0);
+      expect((await db.query('select * from public.orders where organization_id=$1',[f.org])).rows).toHaveLength(0);
       expect((await db.query('select * from public.order_items')).rows).toHaveLength(0);
       expect((await db.query('select * from public.audit_logs')).rows).toHaveLength(0);
     });
@@ -180,7 +181,7 @@ function suite(name: string, url?: string) {
       await db.exec('set local role service_role');
       const result = await reserve(db,f);
       await command('confirm_reserved_order',result.order_id);
-      await reject(() => db.exec("update public.orders set status='refunded'"),'42501');
+      await reject(() => db.exec(`update public.orders set status='refunded' where organization_id='${f.org}'`),'42501');
       await db.exec('reset role');
     });
     it('complimentary is explicitly identified, zero-only, and blocked until issuance command exists', async () => {

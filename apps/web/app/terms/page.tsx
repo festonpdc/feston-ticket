@@ -1,0 +1,1 @@
+export default function Terms(){return <main className="legal-page"><h1>Términos</h1><p>La reserva mantiene entradas pendientes de pago durante el plazo indicado por el sistema. El proveedor de pagos y las políticas definitivas serán informados antes de habilitar cobros.</p></main>}
