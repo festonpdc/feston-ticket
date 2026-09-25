@@ -139,6 +139,10 @@ function suite(label: string, remote: boolean) {
       await rejected(`insert into public.orders(organization_id,event_id,customer_id,public_code,currency,subtotal,total) values ('${id(1)}','${id(3)}','${id(5)}','ORD_${'a'.repeat(32)}','USD',99,99)`);
       await rejected(`update public.orders set status='draft' where id='${id(6)}'`);
     });
+    it('payment status supports canonical paid while retaining legacy approved', async () => {
+      const { rows } = await db.query("select enumlabel from pg_enum e join pg_type t on t.oid=e.enumtypid where t.typname='payment_status' order by enumsortorder");
+      expect(rows.map(r => r.enumlabel)).toEqual(expect.arrayContaining(['approved', 'paid']));
+    });
     it('enforces unique public codes, token hashes and append-only audit', async () => {
       await rejected(`update public.tickets set public_code='TKT_${'1'.padStart(32,'0')}' where id='${id(8,2)}'`, '23505');
       await rejected(`update public.tickets set secure_token_hash='${'1'.padStart(64,'0')}' where id='${id(8,2)}'`, '23505');
