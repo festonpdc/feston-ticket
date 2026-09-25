@@ -15,8 +15,11 @@ export async function POST(request: Request) {
   } catch {
     return NextResponse.json({ error: 'Invalid webhook' }, { status: 400 });
   }
+  return handleVerifiedStripeEvent(event, createAdminClient());
+}
+
+export async function handleVerifiedStripeEvent(event: VerifiedStripeEvent, db: ReturnType<typeof createAdminClient>) {
   try {
-    const db = createAdminClient();
     const result = await applyVerifiedStripeEvent(event, db);
     if (result === 'ignored') return NextResponse.json({ received: true });
     return NextResponse.json({ received: true, result });
@@ -26,9 +29,48 @@ export async function POST(request: Request) {
 }
 
 type VerifiedStripeEvent = { id: string; type: string; data: { object: unknown } };
+
+type SupabaseRpcError = {
+  code?: unknown;
+  message?: unknown;
+  details?: unknown;
+  hint?: unknown;
+};
+
+function sanitizeLogValue(value: unknown) {
+  if (typeof value !== 'string') return undefined;
+
+  return value
+    .slice(0, 2_000)
+    .replace(/\b(?:sk|pk|whsec)_(?:test|live)_[A-Za-z0-9_-]+\b/gi, '[REDACTED_STRIPE_SECRET]')
+    .replace(/\bpi_[A-Za-z0-9]+_secret_[A-Za-z0-9_-]+\b/gi, '[REDACTED_CLIENT_SECRET]')
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[REDACTED_TOKEN]')
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[REDACTED_EMAIL]')
+    .replace(/\+?\d[\d ()-]{7,}\d/g, '[REDACTED_PHONE]')
+    .replace(/\b(authorization|password|secret|token)\s*[:=]\s*[^\s,;]+/gi, '$1=[REDACTED]');
+}
+
+function logRpcError(error: SupabaseRpcError, context: {
+  eventId: string;
+  eventType: string;
+  providerPaymentId: string;
+  orderId?: string;
+}) {
+  console.error('stripe_webhook.stage=payment_event_rpc_failed', {
+    event_id: context.eventId,
+    event_type: context.eventType,
+    provider_payment_id: context.providerPaymentId,
+    ...(context.orderId ? { order_id: context.orderId } : {}),
+    code: sanitizeLogValue(error.code),
+    message: sanitizeLogValue(error.message),
+    details: sanitizeLogValue(error.details),
+    hint: sanitizeLogValue(error.hint),
+  });
+}
+
 export async function applyVerifiedStripeEvent(event: VerifiedStripeEvent, db: ReturnType<typeof createAdminClient>) {
     if (!['payment_intent.succeeded', 'payment_intent.payment_failed', 'payment_intent.processing'].includes(event.type)) return 'ignored' as const;
-    const intent = event.data.object as { id?: string; amount?: number; currency?: string; payment_method_types?: string[] };
+    const intent = event.data.object as { id?: string; amount?: number; currency?: string; payment_method_types?: string[]; metadata?: { order_id?: unknown } };
     if (!intent.id || typeof intent.amount !== 'number' || typeof intent.currency !== 'string') throw new Error('invalid_payment_intent');
     const method = intent.payment_method_types?.includes('oxxo') ? 'oxxo' : 'card';
     const repository = {
@@ -38,7 +80,15 @@ export async function applyVerifiedStripeEvent(event: VerifiedStripeEvent, db: R
           p_event_type: input.eventType, p_amount: input.amount, p_currency: input.currency,
           p_method: input.method,
         } as never);
-        if (result.error) throw new Error('payment_event_rpc_failed');
+        if (result.error) {
+          logRpcError(result.error, {
+            eventId: input.eventId,
+            eventType: input.eventType,
+            providerPaymentId: input.providerPaymentId,
+            ...(typeof intent.metadata?.order_id === 'string' ? { orderId: intent.metadata.order_id } : {}),
+          });
+          throw new Error('payment_event_rpc_failed');
+        }
         const value = result.data as { status?: string } | null;
         return value?.status === 'duplicate' ? 'duplicate' : value?.status === 'applied' ? 'applied' : 'rejected';
       },
