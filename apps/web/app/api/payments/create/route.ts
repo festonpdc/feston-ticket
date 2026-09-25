@@ -20,10 +20,14 @@ export async function POST(req: Request) {
       if (!intent.clientSecret) return fail('No pudimos preparar el pago', 409);
       return NextResponse.json({ client_secret: intent.clientSecret, payment_intent_id: intent.providerPaymentId, status: intent.status, return_url: paymentReturnUrl() });
     }
+    if (existing) return fail('No pudimos preparar el pago', 409);
     const intent = await provider.createPaymentIntent({ orderId: order.id, organizationId: order.organization_id, eventId: order.event_id, amount: Number(order.total), currency: order.currency, method: 'card', idempotencyKey: body.idempotency_key });
-    const payment = existing ?? (await db.from('payments').insert({ organization_id: order.organization_id, order_id: order.id, provider: 'stripe', method: 'card', amount: order.total, currency: order.currency, status: 'pending' }).select('id').single()).data;
-    if (!payment) return fail('No pudimos preparar el pago', 500);
-    await db.from('payments').update({ provider_payment_id: intent.providerPaymentId, status: intent.status as never }).eq('id', payment.id);
+    const created = await db.from('payments').insert({
+      organization_id: order.organization_id, order_id: order.id, provider: 'stripe',
+      provider_payment_id: intent.providerPaymentId, method: 'card', amount: order.total,
+      currency: order.currency, status: intent.status as never,
+    }).select('id').single();
+    if (created.error || !created.data) return fail('No pudimos preparar el pago', 500);
     return NextResponse.json({ client_secret: intent.clientSecret, payment_intent_id: intent.providerPaymentId, status: intent.status as never, return_url: paymentReturnUrl() });
   } catch { return fail('No pudimos preparar el pago', 500); }
 }

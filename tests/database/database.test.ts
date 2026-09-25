@@ -51,6 +51,27 @@ function suite(label: string, remote: boolean) {
       expect(rows).toHaveLength(1);
       return rows[0]!.id as string;
     }
+    async function reconciliationFixture() {
+      const order='92000000-0000-4000-8000-000000000001';
+      const item='93000000-0000-4000-8000-000000000001';
+      const payment='94000000-0000-4000-8000-000000000001';
+      await db.exec(`set constraints all deferred;
+        insert into public.orders(id,organization_id,event_id,customer_id,public_code,currency,subtotal,total,reserved_until)
+        values ('${order}','${id(1)}','${id(3)}','${id(5)}','ORD_92000000000000000000000000000001','USD',0,0,now()+interval '15 minutes');
+        insert into public.order_items(id,organization_id,order_id,event_id,ticket_type_id,currency,quantity,unit_price,subtotal)
+        values ('${item}','${id(1)}','${order}','${id(3)}','${id(4)}','USD',1,1500,1500);
+        update public.orders set subtotal=1500,total=1500,status='pending_payment' where id='${order}';
+        insert into public.payments(id,organization_id,order_id,provider,method,status,amount,currency)
+        values ('${payment}','${id(1)}','${order}','stripe','card','pending',1500,'USD');
+        set constraints all immediate`);
+      const reconcile=async(overrides:Record<string,string>={})=>{
+        const values={payment,organization:id(1),order,provider:'pi_reconcile_1',amount:'1500',currency:'USD',...overrides};
+        return (await db.query(`select public.reconcile_stripe_payment_provider_id(
+          $1,$2,$3,$4,$5,$6
+        ) as value`,[values.payment,values.organization,values.order,values.provider,values.amount,values.currency])).rows[0]!.value as {status:string;reason?:string};
+      };
+      return {order,payment,reconcile};
+    }
     it('enables and forces RLS on all 13 private tables', async () => {
       const { rows } = await db.query("select relname,relrowsecurity,relforcerowsecurity from pg_class join pg_namespace n on n.oid=relnamespace where n.nspname='public' and relkind='r'");
       expect(rows).toHaveLength(13);
@@ -152,6 +173,53 @@ function suite(label: string, remote: boolean) {
       expect(String(rows[0]!.prosrc)).not.toContain('update ');
       const result = await db.query("select public.apply_stripe_payment_event('evt_missing','pi_missing','payment_intent.succeeded',100,'MXN','card') as value");
       expect(result.rows[0]!.value).toEqual({ status: 'rejected', reason: 'payment_not_found' });
+    });
+    it('reconciles a missing Stripe provider ID once and remains idempotent',async()=>{
+      const f=await reconciliationFixture();
+      expect(await f.reconcile()).toMatchObject({status:'applied'});
+      expect(await f.reconcile()).toMatchObject({status:'already_applied'});
+      expect(await f.reconcile({provider:'pi_reconcile_other'})).toMatchObject({status:'rejected',reason:'provider_payment_id_immutable'});
+      await rejected(`update public.payments set provider_payment_id='pi_direct_change' where id='${f.payment}'`);
+    });
+    it.each([
+      ['amount mismatch',{amount:'1501'},'amount_or_currency_mismatch'],
+      ['currency mismatch',{currency:'MXN'},'amount_or_currency_mismatch'],
+      ['organization mismatch',{organization:'10000000-0000-4000-8000-000000000002'},'organization_or_order_mismatch'],
+      ['order mismatch',{order:'60000000-0000-4000-8000-000000000002'},'organization_or_order_mismatch'],
+    ])('rejects Stripe reconciliation %s',async(_label,overrides,reason)=>{
+      const f=await reconciliationFixture();
+      expect(await f.reconcile(overrides)).toMatchObject({status:'rejected',reason});
+    });
+    it.each([
+      ['consumed event',`update public.payments set provider_event_id='evt_consumed' where id='94000000-0000-4000-8000-000000000001'`,'event_already_consumed'],
+      ['non-pending payment',`update public.payments set status='failed' where id='94000000-0000-4000-8000-000000000001'`,'payment_state'],
+      ['non-pending order',`update public.orders set status='expired' where id='92000000-0000-4000-8000-000000000001'`,'order_state'],
+    ])('rejects reconciliation for %s',async(_label,mutation,reason)=>{
+      const f=await reconciliationFixture();
+      await db.exec(mutation);
+      expect(await f.reconcile()).toMatchObject({status:'rejected',reason});
+    });
+    it('rejects a provider ID already used by another payment',async()=>{
+      const f=await reconciliationFixture();
+      await db.exec(`insert into public.payments(organization_id,order_id,provider,provider_payment_id,method,status,amount,currency)
+        values ('${id(1)}','${id(6)}','stripe','pi_reconcile_1','card','pending',1500,'USD')`);
+      expect(await f.reconcile()).toMatchObject({status:'rejected',reason:'provider_payment_id_in_use'});
+    });
+    it('rejects ambiguous Stripe payments for an order',async()=>{
+      const f=await reconciliationFixture();
+      await db.exec(`insert into public.payments(organization_id,order_id,provider,method,status,amount,currency)
+        values ('${id(1)}','${f.order}','stripe','card','pending',1500,'USD')`);
+      expect(await f.reconcile()).toMatchObject({status:'rejected',reason:'ambiguous_payment'});
+    });
+    it('keeps reconciliation service-only with a fixed search path',async()=>{
+      const {rows}=await db.query(`select p.prosecdef,p.proconfig,
+        has_function_privilege('anon',p.oid,'execute') anon,
+        has_function_privilege('authenticated',p.oid,'execute') authenticated,
+        has_function_privilege('service_role',p.oid,'execute') service
+        from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+        where n.nspname='public' and p.proname='reconcile_stripe_payment_provider_id'`);
+      expect(rows[0]).toMatchObject({prosecdef:true,anon:false,authenticated:false,service:true});
+      expect(rows[0]!.proconfig).toContain('search_path=pg_catalog');
     });
     it('enforces unique public codes, token hashes and append-only audit', async () => {
       await rejected(`update public.tickets set public_code='TKT_${'1'.padStart(32,'0')}' where id='${id(8,2)}'`, '23505');

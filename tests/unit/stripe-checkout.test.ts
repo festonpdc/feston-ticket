@@ -20,6 +20,13 @@ describe('Stripe card checkout contract', () => {
     expect(createRoute).toContain('Number(order.total)');
     expect(createRoute).toContain('currency: order.currency');
   });
+  it('persists the Stripe identifier in the immutable payment snapshot at insert time', () => {
+    expect(createRoute).toContain('provider_payment_id: intent.providerPaymentId');
+    expect(createRoute).not.toMatch(/from\('payments'\)\.update\(\{\s*provider_payment_id/);
+    expect(createRoute).toContain("if (existing) return fail('No pudimos preparar el pago', 409)");
+    expect(createRoute).toContain('if (created.error || !created.data)');
+    expect(createRoute.indexOf("if (existing) return fail('No pudimos preparar el pago', 409)")).toBeLessThan(createRoute.indexOf('provider.createPaymentIntent'));
+  });
   it('protects create and status with the reservation capability', () => {
     expect(createRoute).toContain('verifyPaymentCapability');
     expect(statusRoute).toContain('verifyPaymentCapability');

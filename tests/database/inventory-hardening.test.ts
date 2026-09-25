@@ -132,10 +132,10 @@ function suite(name:string,url?:string) {
         has_function_privilege('service_role',p.oid,'execute') as service,
         exists(select 1 from aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) where grantee=0 and privilege_type='EXECUTE') as public_execute
         from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' order by p.proname`)).rows;
-      expect(rows.map(r=>r.proname)).toEqual(['apply_stripe_payment_event','cancel_reservation','confirm_reserved_order','expire_reservations','reserve_tickets','ticket_availability']);
+      expect(rows.map(r=>r.proname)).toEqual(['apply_stripe_payment_event','cancel_reservation','confirm_reserved_order','expire_reservations','reconcile_stripe_payment_provider_id','reserve_tickets','ticket_availability']);
       for(const fn of rows) {
         expect(fn.prosecdef).toBe(true);
-        expect(fn.proconfig).toContain(fn.proname==='apply_stripe_payment_event'?'search_path=pg_catalog':'search_path=""');
+        expect(fn.proconfig).toContain(['apply_stripe_payment_event','reconcile_stripe_payment_provider_id'].includes(String(fn.proname))?'search_path=pg_catalog':'search_path=""');
         expect(['anon','authenticated','service_role']).not.toContain(fn.owner);
         expect(fn.anon).toBe(fn.proname==='ticket_availability');
         expect(fn.authenticated).toBe(fn.proname==='ticket_availability');
