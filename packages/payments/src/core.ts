@@ -2,7 +2,7 @@ import type { PaymentIntentInput, PaymentIntentResult, PaymentMethod, PaymentPro
 
 export type PayableOrder = { id: string; organizationId: string; eventId: string; status: 'pending_payment' | 'paid' | 'expired' | 'cancelled'; total: number; currency: string; reservedUntil: string | null; itemCount: number };
 export type LogicalPayment = { id: string; orderId: string; organizationId: string; provider: 'stripe'; method: PaymentMethod; amount: number; currency: string; status: PaymentStatus; providerPaymentId: string | null; providerEventId?: string | null };
-export interface PaymentRepository { getOrderForPayment(orderId: string): Promise<PayableOrder | null>; findReusablePayment(orderId: string, method: PaymentMethod): Promise<LogicalPayment | null>; createPayment(payment: Omit<LogicalPayment, 'id'>): Promise<LogicalPayment>; attachIntent(paymentId: string, providerPaymentId: string): Promise<void>; markPaymentFailed(paymentId: string): Promise<void>; applyVerifiedEvent(input: { eventId: string; eventType: string; providerPaymentId: string; amount: number; currency: string; method: PaymentMethod }): Promise<'applied' | 'duplicate' | 'rejected'>; }
+export interface PaymentRepository { getOrderForPayment(orderId: string): Promise<PayableOrder | null>; findReusablePayment(orderId: string, method: PaymentMethod): Promise<LogicalPayment | null>; createPayment(payment: Omit<LogicalPayment, 'id'>): Promise<LogicalPayment>; attachIntent(paymentId: string, providerPaymentId: string): Promise<void>; markPaymentFailed(paymentId: string): Promise<void>; applyVerifiedEvent(input: { eventId: string; eventType: string; providerPaymentId: string; providerEventCreatedAt: string; amount: number; currency: string; method: PaymentMethod }): Promise<'applied' | 'duplicate' | 'rejected' | 'reconciliation_required'>; }
 export async function createPayment(repository: PaymentRepository, provider: PaymentProvider, orderId: string, method: PaymentMethod, idempotencyKey: string): Promise<{ payment: LogicalPayment; intent: PaymentIntentResult }> {
   const order = await repository.getOrderForPayment(orderId);
   if (!order || order.status !== 'pending_payment' || order.itemCount < 1 || order.total <= 0 || order.currency !== 'MXN') throw new Error('Order is not payable');
@@ -15,7 +15,8 @@ export async function createPayment(repository: PaymentRepository, provider: Pay
   catch (error) { await repository.markPaymentFailed(payment.id); throw error; }
 }
 
-export async function processVerifiedStripeEvent(repository: PaymentRepository, event: { id: string; type: string; paymentIntentId: string; amount: number; currency: string; method: PaymentMethod }): Promise<'applied' | 'duplicate' | 'rejected'> {
+export async function processVerifiedStripeEvent(repository: PaymentRepository, event: { id: string; type: string; created: number; paymentIntentId: string; amount: number; currency: string; method: PaymentMethod }): Promise<'applied' | 'duplicate' | 'rejected' | 'reconciliation_required'> {
   if (event.type !== 'payment_intent.succeeded' && event.type !== 'payment_intent.payment_failed' && event.type !== 'payment_intent.processing') return 'rejected';
-  return repository.applyVerifiedEvent({ eventId: event.id, eventType: event.type, providerPaymentId: event.paymentIntentId, amount: event.amount, currency: event.currency.toUpperCase(), method: event.method });
+  if (!Number.isSafeInteger(event.created) || event.created <= 0) return 'rejected';
+  return repository.applyVerifiedEvent({ eventId: event.id, eventType: event.type, providerPaymentId: event.paymentIntentId, providerEventCreatedAt: new Date(event.created * 1000).toISOString(), amount: event.amount, currency: event.currency.toUpperCase(), method: event.method });
 }

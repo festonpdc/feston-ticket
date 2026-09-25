@@ -20,6 +20,10 @@ describe('Stripe card checkout contract', () => {
     expect(createRoute).toContain('Number(order.total)');
     expect(createRoute).toContain('currency: order.currency');
   });
+  it('never accepts provider event time from the browser payment route', () => {
+    expect(tickets).not.toContain('provider_event_created_at');
+    expect(createRoute).not.toContain('provider_event_created_at');
+  });
   it('persists the Stripe identifier in the immutable payment snapshot at insert time', () => {
     expect(createRoute).toContain('provider_payment_id: intent.providerPaymentId');
     expect(createRoute).not.toMatch(/from\('payments'\)\.update\(\{\s*provider_payment_id/);

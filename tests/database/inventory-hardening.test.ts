@@ -15,6 +15,18 @@ function suite(name:string,url?:string) {
       try {await expect(work()).rejects.toMatchObject({code});}
       finally {await db.exec('rollback to savepoint expected_failure');}
     }
+    async function cardPayment(orderId:string, providerPaymentId=`pi_${randomUUID().replaceAll('-','')}`) {
+      await db.query(`insert into public.payments(organization_id,order_id,provider,provider_payment_id,method,status,amount,currency)
+        select organization_id,id,'stripe',$2,'card','pending',total,currency from public.orders where id=$1`,[orderId,providerPaymentId]);
+      const order=(await db.query<{reserved_until:string}>('select reserved_until from public.orders where id=$1',[orderId])).rows[0]!;
+      const apply=async(eventId:string,eventCreatedAt:string,overrides:Record<string,unknown>={})=>{
+        const values={providerPaymentId,eventType:'payment_intent.succeeded',amount:1500,currency:'USD',method:'card',...overrides};
+        return (await db.query<{value:{status:string;reason?:string}}>(`select public.apply_stripe_payment_event(
+          $1,$2,$3,$4,$5,$6,$7::timestamptz
+        ) as value`,[eventId,values.providerPaymentId,values.eventType,values.amount,values.currency,values.method,eventCreatedAt])).rows[0]!.value;
+      };
+      return {providerPaymentId,reservedUntil:order.reserved_until,apply};
+    }
     it('same key/payload returns one reservation, one audit and consumes once',async()=>{
       const first=await reserve(db,f,2,undefined,key);
       for(let attempt=0;attempt<5;attempt++) expect(await reserve(db,f,2,undefined,key)).toEqual(first);
@@ -166,6 +178,75 @@ function suite(name:string,url?:string) {
       await reserve(db,f,1,[{ticket_type_id:f.secondType,quantity:1},{ticket_type_id:f.type,quantity:1}],key);
       await reject(()=>reserve(db,f,1,[{ticket_type_id:f.type,quantity:1},{ticket_type_id:f.secondType,quantity:1}]),'23514');
       expect((await db.query('select sum(quantity)::text as count from public.order_items where organization_id=$1',[f.org])).rows[0]!.count).toBe('2');
+    });
+    it('applies Card success using verified event time before an active deadline',async()=>{
+      const reservation=await reserve(db,f,1);
+      const card=await cardPayment(reservation.order_id);
+      const eventTime=(await db.query<{value:string}>("select ($1::timestamptz-interval '1 second')::text value",[card.reservedUntil])).rows[0]!.value;
+      expect(await card.apply('evt_card_active',eventTime)).toMatchObject({status:'applied',payment_status:'paid'});
+      expect((await db.query('select status from public.orders where id=$1',[reservation.order_id])).rows[0]!.status).toBe('paid');
+    });
+    it('applies a pre-expiry Card event after delivery expiry and keeps retries idempotent',async()=>{
+      const order=await historicalOrder(db,f,1,'pending_payment',true);
+      const card=await cardPayment(order);
+      const eventTime=(await db.query<{value:string}>("select ($1::timestamptz-interval '1 minute')::text value",[card.reservedUntil])).rows[0]!.value;
+      expect(await card.apply('evt_card_late_delivery',eventTime)).toMatchObject({status:'applied',payment_status:'paid'});
+      expect(await card.apply('evt_card_late_delivery',eventTime)).toMatchObject({status:'duplicate'});
+      const stored=(await db.query('select status,provider_event_id,provider_event_created_at from public.payments where order_id=$1',[order])).rows[0]!;
+      expect(stored).toMatchObject({status:'paid',provider_event_id:'evt_card_late_delivery'});
+      expect((await db.query('select provider_event_created_at=$2::timestamptz matches from public.payments where order_id=$1',[order,eventTime])).rows[0]!.matches).toBe(true);
+    });
+    it('records reconciliation when Stripe success happened after the reservation deadline',async()=>{
+      const order=await historicalOrder(db,f,1,'pending_payment',true);
+      const card=await cardPayment(order);
+      const eventTime=(await db.query<{value:string}>("select ($1::timestamptz+interval '1 second')::text value",[card.reservedUntil])).rows[0]!.value;
+      expect(await card.apply('evt_card_after_expiry',eventTime)).toMatchObject({status:'reconciliation_required',reason:'event_after_reservation_expiry'});
+      expect((await db.query('select status,provider_event_id from public.payments where order_id=$1',[order])).rows[0]).toMatchObject({status:'pending',provider_event_id:'evt_card_after_expiry'});
+      expect((await db.query('select status from public.orders where id=$1',[order])).rows[0]!.status).toBe('pending_payment');
+    });
+    it.each(['expired','cancelled'] as const)('never resurrects an already %s order',async state=>{
+      const order=await historicalOrder(db,f,1,state==='expired'?'pending_payment':'cancelled',true);
+      if(state==='expired') await db.exec('select public.expire_reservations()');
+      const card=await cardPayment(order);
+      const eventTime=(await db.query<{value:string}>("select ($1::timestamptz-interval '1 minute')::text value",[card.reservedUntil])).rows[0]!.value;
+      expect(await card.apply(`evt_card_${state}`,eventTime)).toMatchObject({status:'reconciliation_required',reason:'order_state'});
+      expect((await db.query('select status from public.orders where id=$1',[order])).rows[0]!.status).toBe(state);
+    });
+    it('completes late Card success when limited capacity remains available',async()=>{
+      await db.query('update public.events set capacity=1 where id=$1',[f.event]);
+      await db.query('update public.ticket_types set capacity=1 where id=$1',[f.type]);
+      const order=await historicalOrder(db,f,1,'pending_payment',true);
+      const card=await cardPayment(order);
+      const eventTime=(await db.query<{value:string}>("select ($1::timestamptz-interval '1 minute')::text value",[card.reservedUntil])).rows[0]!.value;
+      expect(await card.apply('evt_card_capacity_available',eventTime)).toMatchObject({status:'applied'});
+      expect((await db.query('select status from public.orders where id=$1',[order])).rows[0]!.status).toBe('paid');
+    });
+    it('records reconciliation without overbooking when late Card capacity was resold',async()=>{
+      await db.query('update public.events set capacity=1 where id=$1',[f.event]);
+      await db.query('update public.ticket_types set capacity=1 where id=$1',[f.type]);
+      const oldOrder=await historicalOrder(db,f,1,'pending_payment',true);
+      const card=await cardPayment(oldOrder);
+      const replacement=await reserve(db,f,1);
+      await db.query('select public.confirm_reserved_order($1,$2)',[f.org,replacement.order_id]);
+      const eventTime=(await db.query<{value:string}>("select ($1::timestamptz-interval '1 minute')::text value",[card.reservedUntil])).rows[0]!.value;
+      expect(await card.apply('evt_card_capacity_conflict',eventTime)).toMatchObject({status:'reconciliation_required',reason:'capacity_conflict'});
+      expect((await db.query('select status from public.orders where id=$1',[oldOrder])).rows[0]!.status).toBe('pending_payment');
+      expect((await db.query("select coalesce(sum(i.quantity),0)::text used from public.order_items i join public.orders o on o.id=i.order_id where o.event_id=$1 and o.status='paid'",[f.event])).rows[0]!.used).toBe('1');
+    });
+    it('preserves OXXO voucher processing and later success',async()=>{
+      const reservation=await reserve(db,f,1);
+      const provider=`pi_${randomUUID().replaceAll('-','')}`;
+      await db.query(`insert into public.payments(organization_id,order_id,provider,provider_payment_id,method,status,amount,currency)
+        select organization_id,id,'stripe',$2,'oxxo','pending',total,currency from public.orders where id=$1`,[reservation.order_id,provider]);
+      const processing=(await db.query<{value:{status:string}}>(`select public.apply_stripe_payment_event(
+        'evt_oxxo_processing',$1,'payment_intent.processing',1500,'USD','oxxo',now(),now()+interval '1 day','https://pay.example.invalid/voucher'
+      ) value`,[provider])).rows[0]!.value;
+      expect(processing.status).toBe('applied');
+      const success=(await db.query<{value:{status:string;payment_status:string}}>(`select public.apply_stripe_payment_event(
+        'evt_oxxo_success',$1,'payment_intent.succeeded',1500,'USD','oxxo',now()+interval '1 hour'
+      ) value`,[provider])).rows[0]!.value;
+      expect(success).toMatchObject({status:'applied',payment_status:'paid'});
+      expect((await db.query('select status from public.orders where id=$1',[reservation.order_id])).rows[0]!.status).toBe('paid');
     });
   });
 }

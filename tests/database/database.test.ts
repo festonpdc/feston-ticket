@@ -171,7 +171,7 @@ function suite(label: string, remote: boolean) {
       expect(rows[0]!.proconfig).toEqual(['search_path=pg_catalog']);
       expect(String(rows[0]!.prosrc)).toContain('private.apply_stripe_payment_event');
       expect(String(rows[0]!.prosrc)).not.toContain('update ');
-      const result = await db.query("select public.apply_stripe_payment_event('evt_missing','pi_missing','payment_intent.succeeded',100,'MXN','card') as value");
+      const result = await db.query("select public.apply_stripe_payment_event('evt_missing','pi_missing','payment_intent.succeeded',100,'MXN','card',now()) as value");
       expect(result.rows[0]!.value).toEqual({ status: 'rejected', reason: 'payment_not_found' });
     });
     it('reconciles a missing Stripe provider ID once and remains idempotent',async()=>{

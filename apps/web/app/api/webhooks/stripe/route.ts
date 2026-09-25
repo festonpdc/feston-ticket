@@ -28,7 +28,7 @@ export async function handleVerifiedStripeEvent(event: VerifiedStripeEvent, db: 
   }
 }
 
-type VerifiedStripeEvent = { id: string; type: string; data: { object: unknown } };
+type VerifiedStripeEvent = { id: string; type: string; created: number; data: { object: unknown } };
 
 type SupabaseRpcError = {
   code?: unknown;
@@ -78,7 +78,7 @@ export async function applyVerifiedStripeEvent(event: VerifiedStripeEvent, db: R
         const result = await db.rpc('apply_stripe_payment_event' as never, {
           p_provider_event_id: input.eventId, p_provider_payment_id: input.providerPaymentId,
           p_event_type: input.eventType, p_amount: input.amount, p_currency: input.currency,
-          p_method: input.method,
+          p_method: input.method, p_provider_event_created_at: input.providerEventCreatedAt,
         } as never);
         if (result.error) {
           logRpcError(result.error, {
@@ -90,11 +90,13 @@ export async function applyVerifiedStripeEvent(event: VerifiedStripeEvent, db: R
           throw new Error('payment_event_rpc_failed');
         }
         const value = result.data as { status?: string } | null;
-        return value?.status === 'duplicate' ? 'duplicate' : value?.status === 'applied' ? 'applied' : 'rejected';
+        return value?.status === 'duplicate' ? 'duplicate'
+          : value?.status === 'applied' ? 'applied'
+            : value?.status === 'reconciliation_required' ? 'reconciliation_required' : 'rejected';
       },
     } as Pick<PaymentRepository, 'applyVerifiedEvent'> as PaymentRepository;
     const result = await processVerifiedStripeEvent(repository, {
-      id: event.id, type: event.type, paymentIntentId: intent.id,
+      id: event.id, type: event.type, created: event.created, paymentIntentId: intent.id,
       amount: intent.amount, currency: intent.currency, method,
     });
     return result;

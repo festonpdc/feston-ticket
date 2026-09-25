@@ -14,12 +14,17 @@ describe('payment creation command', () => {
   it('passes a verified Stripe success to the financial repository without changing amount or currency', async () => {
     const r = repo();
     (r.applyVerifiedEvent as any).mockResolvedValue('applied');
-    await expect(processVerifiedStripeEvent(r, { id: 'evt_1', type: 'payment_intent.succeeded', paymentIntentId: 'pi_1', amount: 54000, currency: 'mxn', method: 'card' })).resolves.toBe('applied');
-    expect(r.applyVerifiedEvent).toHaveBeenCalledWith({ eventId: 'evt_1', eventType: 'payment_intent.succeeded', providerPaymentId: 'pi_1', amount: 54000, currency: 'MXN', method: 'card' });
+    await expect(processVerifiedStripeEvent(r, { id: 'evt_1', type: 'payment_intent.succeeded', created: 1790366087, paymentIntentId: 'pi_1', amount: 54000, currency: 'mxn', method: 'card' })).resolves.toBe('applied');
+    expect(r.applyVerifiedEvent).toHaveBeenCalledWith({ eventId: 'evt_1', eventType: 'payment_intent.succeeded', providerPaymentId: 'pi_1', providerEventCreatedAt: '2026-09-25T19:54:47.000Z', amount: 54000, currency: 'MXN', method: 'card' });
   });
   it('rejects unsupported events before the financial repository', async () => {
     const r = repo();
-    await expect(processVerifiedStripeEvent(r, { id: 'evt_2', type: 'charge.updated', paymentIntentId: 'pi_1', amount: 54000, currency: 'mxn', method: 'card' })).resolves.toBe('rejected');
+    await expect(processVerifiedStripeEvent(r, { id: 'evt_2', type: 'charge.updated', created: 1790366087, paymentIntentId: 'pi_1', amount: 54000, currency: 'mxn', method: 'card' })).resolves.toBe('rejected');
+    expect(r.applyVerifiedEvent).not.toHaveBeenCalled();
+  });
+  it('rejects an invalid provider-created timestamp before the financial repository', async () => {
+    const r = repo();
+    await expect(processVerifiedStripeEvent(r, { id: 'evt_invalid_time', type: 'payment_intent.succeeded', created: 0, paymentIntentId: 'pi_1', amount: 54000, currency: 'mxn', method: 'card' })).resolves.toBe('rejected');
     expect(r.applyVerifiedEvent).not.toHaveBeenCalled();
   });
 });
