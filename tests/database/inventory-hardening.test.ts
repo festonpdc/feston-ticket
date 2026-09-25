@@ -153,7 +153,7 @@ function suite(name:string,url?:string) {
         has_function_privilege('service_role',p.oid,'execute') as service,
         exists(select 1 from aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) where grantee=0 and privilege_type='EXECUTE') as public_execute
         from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' order by p.proname`)).rows;
-      expect(rows.map(r=>r.proname)).toEqual(['apply_stripe_payment_event','cancel_reservation','confirm_reserved_order','expire_reservations','issue_tickets_for_paid_order','reconcile_stripe_payment_provider_id','reserve_tickets','ticket_availability']);
+      expect(rows.map(r=>r.proname)).toEqual(['apply_stripe_payment_event','cancel_reservation','claim_order_ticket_email_delivery','confirm_reserved_order','expire_reservations','finish_order_ticket_email_delivery','issue_tickets_for_paid_order','reconcile_stripe_payment_provider_id','reserve_tickets','ticket_availability']);
       for(const fn of rows) {
         expect(fn.prosecdef).toBe(true);
         expect(fn.proconfig).toContain(['apply_stripe_payment_event','reconcile_stripe_payment_provider_id'].includes(String(fn.proname))?'search_path=pg_catalog':'search_path=""');
@@ -283,6 +283,36 @@ function suite(name:string,url?:string) {
       const serialized=JSON.stringify(stored);
       for(const token of [...first.tokens,...retry.tokens])expect(serialized).not.toContain(token);
       expect((await db.query('select id from public.tickets where secure_token_hash=$1',[createHash('sha256').update(first.tokens[0]!).digest('hex')])).rows).toHaveLength(1);
+    });
+    it('rejects email delivery until payment and the complete ticket manifest exist',async()=>{
+      const reservation=await reserve(db,f,1);
+      const claim=async()=>(await db.query<{value:{status:string;reason:string}}>('select public.claim_order_ticket_email_delivery($1,$2) value',[f.org,reservation.order_id])).rows[0]!.value;
+      expect(await claim()).toEqual({status:'rejected',reason:'order_not_paid'});
+      await db.query('select public.confirm_reserved_order($1,$2)',[f.org,reservation.order_id]);
+      await db.query(`insert into public.payments(organization_id,order_id,provider,provider_payment_id,method,status,amount,currency)
+        values($1,$2,'stripe',$3,'card','paid',1500,'USD')`,[f.org,reservation.order_id,`pi_${randomUUID().replaceAll('-','')}`]);
+      expect(await claim()).toEqual({status:'rejected',reason:'tickets_incomplete'});
+    });
+    it('claims one initial email delivery, persists sanitized failure and retries without financial mutation',async()=>{
+      const reservation=await reserve(db,f,1);
+      await db.query('select public.confirm_reserved_order($1,$2)',[f.org,reservation.order_id]);
+      await db.query(`insert into public.payments(organization_id,order_id,provider,provider_payment_id,method,status,amount,currency)
+        values($1,$2,'stripe',$3,'card','paid',1500,'USD')`,[f.org,reservation.order_id,`pi_${randomUUID().replaceAll('-','')}`]);
+      const manifest=await issuanceManifest(reservation.order_id);
+      await db.query('select public.issue_tickets_for_paid_order($1,$2,$3::jsonb)',[f.org,reservation.order_id,JSON.stringify(manifest.manifest)]);
+      const claim=async()=>(await db.query<{value:{status:string;delivery_id:string;attempt_count?:number}}>('select public.claim_order_ticket_email_delivery($1,$2) value',[f.org,reservation.order_id])).rows[0]!.value;
+      const first=await claim();expect(first).toMatchObject({status:'claimed',attempt_count:1});
+      expect(await claim()).toMatchObject({status:'busy',delivery_id:first.delivery_id});
+      await db.query("select public.finish_order_ticket_email_delivery($1,false,null,'UPSTREAM SECRET DETAIL')",[first.delivery_id]);
+      const failed=(await db.query('select status,error_code from public.deliveries where id=$1',[first.delivery_id])).rows[0]!;
+      expect(failed).toEqual({status:'failed',error_code:'provider_error'});
+      const retry=await claim();expect(retry).toMatchObject({status:'claimed',delivery_id:first.delivery_id,attempt_count:2});
+      await db.query("select public.finish_order_ticket_email_delivery($1,true,'resend_message_1',null)",[first.delivery_id]);
+      expect(await claim()).toMatchObject({status:'already_sent',delivery_id:first.delivery_id});
+      expect((await db.query('select count(*)::int count from public.deliveries where order_id=$1',[reservation.order_id])).rows[0]!.count).toBe(1);
+      expect((await db.query('select status from public.orders where id=$1',[reservation.order_id])).rows[0]!.status).toBe('paid');
+      expect((await db.query('select status from public.payments where order_id=$1',[reservation.order_id])).rows[0]!.status).toBe('paid');
+      expect((await db.query('select status from public.tickets where order_id=$1',[reservation.order_id])).rows[0]!.status).toBe('valid');
     });
   });
 }

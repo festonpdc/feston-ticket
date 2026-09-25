@@ -72,9 +72,9 @@ function suite(label: string, remote: boolean) {
       };
       return {order,payment,reconcile};
     }
-    it('enables and forces RLS on all 13 private tables', async () => {
+    it('enables and forces RLS on all 14 private tables', async () => {
       const { rows } = await db.query("select relname,relrowsecurity,relforcerowsecurity from pg_class join pg_namespace n on n.oid=relnamespace where n.nspname='public' and relkind='r'");
-      expect(rows).toHaveLength(13);
+      expect(rows).toHaveLength(14);
       expect(rows.every(r => r.relrowsecurity && r.relforcerowsecurity)).toBe(true);
     });
     it('owner A can read own operational records and never B', async () => {
