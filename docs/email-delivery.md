@@ -18,3 +18,14 @@ identifiers. It never accepts a browser-selected recipient. Resend receives a
 stable idempotency key derived from the delivery ID. Provider failure updates
 only the delivery row; financial and ticket state remain unchanged. No public
 send endpoint or Stripe webhook integration exists in this foundation phase.
+
+The final message uses table-based HTML with inline styles plus a complete
+plain-text alternative. It contains no remote fonts, scripts, payment IDs, or
+internal UUIDs. QR images are deliberately omitted because CID and data-URI
+support varies by client; every ticket instead has a direct opaque-token link.
+
+The general “VER MIS ENTRADAS” link uses a separate AES-256-GCM capability
+scoped to the organization/order and valid for one year from order creation.
+It is read-only, works across devices, cannot authorize payment operations, and
+can be rotated globally through `TICKET_QR_SECRET`. The capability route reads
+only the paid order and its tickets and performs no check-in or mutation.

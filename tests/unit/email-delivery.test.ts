@@ -5,10 +5,10 @@ import type {EmailProvider,EmailRequest} from '../../apps/web/lib/email-provider
 
 function fakeDb(claim:{status:string;delivery_id?:string;recipient?:string}={status:'claimed',delivery_id:'delivery-1',recipient:'buyer@example.test'}){
   const rows:Record<string,unknown[]>={
-    orders:[{id:'order-1',customer_id:'customer-1',status:'paid'}],
-    order_items:[{id:'item-1',quantity:1}],
-    tickets:[{id:'11111111-1111-4111-8111-111111111111',public_code:'TKT_11111111111111111111111111111111',status:'valid',order_item_id:'item-1',unit_index:1}],
-    customers:[{email:'buyer@example.test'}],
+    orders:[{id:'order-1',customer_id:'customer-1',event_id:'event-1',status:'paid',created_at:'2026-01-01T00:00:00Z'}],
+    order_items:[{id:'item-1',quantity:1,ticket_type_id:'type-1'},{id:'item-2',quantity:2,ticket_type_id:'type-2'}],
+    tickets:[{id:'11111111-1111-4111-8111-111111111111',public_code:'TKT_11111111111111111111111111111111',status:'valid',order_item_id:'item-1',ticket_type_id:'type-1'},{id:'22222222-2222-4222-8222-222222222221',public_code:'TKT_22222222222222222222222222222221',status:'valid',order_item_id:'item-2',ticket_type_id:'type-2'},{id:'22222222-2222-4222-8222-222222222222',public_code:'TKT_22222222222222222222222222222222',status:'valid',order_item_id:'item-2',ticket_type_id:'type-2'}],
+    customers:[{email:'buyer@example.test',full_name:'Buyer Test'}],events:[{name:'Fiesta de Disfraces',starts_at:'2026-10-31T23:59:00-05:00',timezone:'America/Cancun',location_id:'location-1'}],ticket_types:[{id:'type-1',name:'HOMBRES'},{id:'type-2',name:'MUJERES'}],locations:[{name:'La Hacienda Riviera Maya'}],
   };
   const rpc=vi.fn(async(name:string,args:Record<string,unknown>)=>({data:name==='claim_order_ticket_email_delivery'?claim:{status:args.p_success?'sent':'failed'},error:null}));
   type Builder={select:()=>Builder;eq:()=>Builder;maybeSingle:()=>Promise<unknown>;then:(resolve:(value:unknown)=>void)=>void};
@@ -24,6 +24,9 @@ describe('transactional email delivery foundation',()=>{
     await expect(sendOrderTicketsEmail('org-1','order-1',{db:db as never,provider})).resolves.toMatchObject({status:'sent',deliveryId:'delivery-1'});
     expect(request?.to).toBe('buyer@example.test');
     expect(request?.idempotencyKey).toBe('tickets_initial:delivery-1');
+    expect(request?.subject).toBe('Tus entradas para Fiesta de Disfraces están listas');
+    expect(request?.html).toContain('TUS ENTRADAS');expect(request?.text).toContain('VER MIS ENTRADAS:');
+    expect((request?.html.match(/VER ENTRADA</g)??[])).toHaveLength(3);expect(request?.html).toContain('1 HOMBRE · 2 MUJERES');
     expect(rpc).toHaveBeenLastCalledWith('finish_order_ticket_email_delivery',expect.objectContaining({p_success:true,p_provider_message_id:'message-1'}));
   });
   it('sanitizes provider failure and changes only the delivery record',async()=>{
@@ -33,7 +36,7 @@ describe('transactional email delivery foundation',()=>{
   });
   it('has no browser recipient input and keeps Resend server-only',()=>{
     const service=readFileSync('apps/web/lib/order-ticket-email.ts','utf8');const provider=readFileSync('apps/web/lib/email-provider.ts','utf8');
-    expect(service).toContain("select('email')");
+    expect(service).toContain("select('email,full_name')");
     expect(service).not.toMatch(/recipient\s*:/);
     expect(provider.startsWith("import 'server-only';")).toBe(true);
     expect(provider).toContain('process.env.RESEND_API_KEY');
