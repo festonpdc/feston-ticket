@@ -47,13 +47,13 @@ update public.orders set status='pending_payment', reserved_until=now()+interval
 update public.orders set status='paid' where organization_id in ('10000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000002');
 insert into public.payments(organization_id,order_id,provider,amount,currency,status)
  select organization_id,id,'demo',1500,'USD','approved' from public.orders where organization_id in ('10000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000002');
-insert into public.tickets(id,organization_id,event_id,order_id,order_item_id,ticket_type_id,public_code,secure_token_hash)
+insert into public.tickets(id,organization_id,event_id,order_id,order_item_id,ticket_type_id,unit_index,public_code,secure_token_hash)
  select ('80000000-0000-4000-8000-00000000000' || n)::uuid,
  ('10000000-0000-4000-8000-00000000000' || n)::uuid,
  ('30000000-0000-4000-8000-00000000000' || n)::uuid,
  ('60000000-0000-4000-8000-00000000000' || n)::uuid,
  ('70000000-0000-4000-8000-00000000000' || n)::uuid,
- ('40000000-0000-4000-8000-00000000000' || n)::uuid,
+ ('40000000-0000-4000-8000-00000000000' || n)::uuid, 1,
  'TKT_' || lpad(n::text,32,'0'), lpad(n::text,64,'0') from generate_series(1,2) n;
 insert into public.audit_logs(organization_id,event_type,entity_type,entity_id)
  select organization_id,'order_created','order',id from public.orders where organization_id in ('10000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000002');

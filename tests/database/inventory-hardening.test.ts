@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { assertIsolatedDestructiveTarget } from './remote-guard';
 import { availability, historicalOrder, inventoryDB, reserve, seedInventory, type InventoryDB, type InventoryFixture } from './inventory-support';
@@ -26,6 +26,15 @@ function suite(name:string,url?:string) {
         ) as value`,[eventId,values.providerPaymentId,values.eventType,values.amount,values.currency,values.method,eventCreatedAt])).rows[0]!.value;
       };
       return {providerPaymentId,reservedUntil:order.reserved_until,apply};
+    }
+    async function issuanceManifest(orderId:string) {
+      const items=(await db.query<{id:string;quantity:number}>('select id,quantity from public.order_items where order_id=$1 order by id',[orderId])).rows;
+      const tokens:string[]=[];
+      const manifest=items.flatMap(item=>Array.from({length:Number(item.quantity)},(_,offset)=>{
+        const id=randomUUID();const token=randomBytes(32).toString('base64url');tokens.push(token);
+        return {id,order_item_id:item.id,unit_index:offset+1,public_code:`TKT_${randomBytes(16).toString('hex')}`,secure_token_hash:createHash('sha256').update(token).digest('hex')};
+      }));
+      return {manifest,tokens};
     }
     it('same key/payload returns one reservation, one audit and consumes once',async()=>{
       const first=await reserve(db,f,2,undefined,key);
@@ -144,7 +153,7 @@ function suite(name:string,url?:string) {
         has_function_privilege('service_role',p.oid,'execute') as service,
         exists(select 1 from aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) where grantee=0 and privilege_type='EXECUTE') as public_execute
         from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' order by p.proname`)).rows;
-      expect(rows.map(r=>r.proname)).toEqual(['apply_stripe_payment_event','cancel_reservation','confirm_reserved_order','expire_reservations','reconcile_stripe_payment_provider_id','reserve_tickets','ticket_availability']);
+      expect(rows.map(r=>r.proname)).toEqual(['apply_stripe_payment_event','cancel_reservation','confirm_reserved_order','expire_reservations','issue_tickets_for_paid_order','reconcile_stripe_payment_provider_id','reserve_tickets','ticket_availability']);
       for(const fn of rows) {
         expect(fn.prosecdef).toBe(true);
         expect(fn.proconfig).toContain(['apply_stripe_payment_event','reconcile_stripe_payment_provider_id'].includes(String(fn.proname))?'search_path=pg_catalog':'search_path=""');
@@ -247,6 +256,33 @@ function suite(name:string,url?:string) {
       ) value`,[provider])).rows[0]!.value;
       expect(success).toMatchObject({status:'applied',payment_status:'paid'});
       expect((await db.query('select status from public.orders where id=$1',[reservation.order_id])).rows[0]!.status).toBe('paid');
+    });
+    it('rejects ticket issuance for an unpaid order',async()=>{
+      const reservation=await reserve(db,f,1);
+      const {manifest}=await issuanceManifest(reservation.order_id);
+      const result=(await db.query<{value:{status:string;reason:string}}>('select public.issue_tickets_for_paid_order($1,$2,$3::jsonb) value',[f.org,reservation.order_id,JSON.stringify(manifest)])).rows[0]!.value;
+      expect(result).toEqual({status:'rejected',reason:'order_not_paid'});
+      expect((await db.query('select id from public.tickets where order_id=$1',[reservation.order_id])).rows).toHaveLength(0);
+    });
+    it('issues exactly one secure ticket per paid unit and remains idempotent',async()=>{
+      const reservation=await reserve(db,f,1,[{ticket_type_id:f.type,quantity:1},{ticket_type_id:f.secondType,quantity:2}]);
+      await db.query('select public.confirm_reserved_order($1,$2)',[f.org,reservation.order_id]);
+      await db.query(`insert into public.payments(organization_id,order_id,provider,provider_payment_id,method,status,amount,currency)
+        values($1,$2,'stripe',$3,'card','paid',6500,'USD')`,[f.org,reservation.order_id,`pi_${randomUUID().replaceAll('-','')}`]);
+      const first=await issuanceManifest(reservation.order_id);
+      const issue=async(manifest:unknown)=>(await db.query<{value:{status:string;quantity:number;tickets:Array<Record<string,unknown>>}}>('select public.issue_tickets_for_paid_order($1,$2,$3::jsonb) value',[f.org,reservation.order_id,JSON.stringify(manifest)])).rows[0]!.value;
+      expect(await issue(first.manifest)).toMatchObject({status:'issued',quantity:3});
+      const retry=await issuanceManifest(reservation.order_id);
+      expect(await issue(retry.manifest)).toMatchObject({status:'issued',quantity:3});
+      const stored=(await db.query('select order_item_id,unit_index,public_code,secure_token_hash from public.tickets where order_id=$1 order by order_item_id,unit_index',[reservation.order_id])).rows;
+      expect(stored).toHaveLength(3);
+      expect(new Set(stored.map(row=>row.public_code)).size).toBe(3);
+      expect(new Set(stored.map(row=>row.secure_token_hash)).size).toBe(3);
+      expect(stored.filter(row=>row.unit_index===1)).toHaveLength(2);
+      expect(stored.filter(row=>row.unit_index===2)).toHaveLength(1);
+      const serialized=JSON.stringify(stored);
+      for(const token of [...first.tokens,...retry.tokens])expect(serialized).not.toContain(token);
+      expect((await db.query('select id from public.tickets where secure_token_hash=$1',[createHash('sha256').update(first.tokens[0]!).digest('hex')])).rows).toHaveLength(1);
     });
   });
 }
