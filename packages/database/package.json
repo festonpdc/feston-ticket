@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./server": "./src/server.ts",
+    "./browser": "./src/browser.ts",
     "./admin": "./src/admin.ts",
     "./inventory": "./src/inventory.ts",
     "./inventory-internal": "./src/inventory-internal.ts",

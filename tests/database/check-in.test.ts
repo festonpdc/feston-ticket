@@ -37,7 +37,7 @@ describe('atomic ticket check-in embedded',()=>{
   });
   it('accepts once with a server timestamp, audit, and no raw token persistence',async()=>{
     const before=Date.now();await actor(3);const result=await scan();const after=Date.now();
-    expect(result.result).toBe('accepted');
+    expect(result).toMatchObject({result:'accepted',ticket_type_name:'General',public_code:`TKT_${'1'.padStart(32,'0')}`});
     expect(Date.parse(result.checked_in_at!)).toBeGreaterThanOrEqual(before-1000);
     expect(Date.parse(result.checked_in_at!)).toBeLessThanOrEqual(after+1000);
     await db.exec('reset role');
@@ -48,7 +48,7 @@ describe('atomic ticket check-in embedded',()=>{
     expect(stored).not.toContain(tokenA);
   });
   it('returns already_checked_in on retry without a second record',async()=>{
-    await actor(3);expect((await scan()).result).toBe('accepted');expect(await scan()).toMatchObject({result:'already_checked_in'});
+    await actor(3);expect((await scan()).result).toBe('accepted');expect(await scan()).toMatchObject({result:'already_checked_in',ticket_type_name:'General',public_code:`TKT_${'1'.padStart(32,'0')}`});
     await db.exec('reset role');expect((await db.query<{count:number}>('select count(*)::int count from public.check_ins where ticket_id=$1',[id(8)])).rows[0]!.count).toBe(1);
   });
   it('returns invalid without disclosing ticket data',async()=>{await actor(3);expect(await scan('fst1_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC')).toEqual({result:'invalid'})});

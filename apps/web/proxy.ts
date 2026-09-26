@@ -9,7 +9,8 @@ export function proxy(request: NextRequest) {
   const style = dev
     ? "style-src 'self' 'unsafe-inline'"
     : "style-src 'self' 'nonce-" + nonce + "'";
-  const connect = "connect-src 'self' https://api.stripe.com https://r.stripe.com https://m.stripe.network"
+  const supabaseOrigin=(()=>{try{return new URL(process.env.NEXT_PUBLIC_SUPABASE_URL??'').origin}catch{return ''}})();
+  const connect = "connect-src 'self' https://api.stripe.com https://r.stripe.com https://m.stripe.network"+(supabaseOrigin?` ${supabaseOrigin}`:'')
     + (dev ? ' ws: http://localhost:* http://127.0.0.1:*' : '');
   const csp = [
     "default-src 'self'",
