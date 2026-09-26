@@ -27,4 +27,21 @@ describe('payment creation command', () => {
     await expect(processVerifiedStripeEvent(r, { id: 'evt_invalid_time', type: 'payment_intent.succeeded', created: 0, paymentIntentId: 'pi_1', amount: 54000, currency: 'mxn', method: 'card' })).resolves.toBe('rejected');
     expect(r.applyVerifiedEvent).not.toHaveBeenCalled();
   });
+  it('accepts only a complete OXXO requires_action voucher', async () => {
+    const r = repo();
+    (r.applyVerifiedEvent as any).mockResolvedValue('applied');
+    await expect(processVerifiedStripeEvent(r, {
+      id: 'evt_oxxo', type: 'payment_intent.requires_action', created: 1790366087,
+      paymentIntentId: 'pi_oxxo', amount: 28600, currency: 'mxn', method: 'oxxo',
+      voucherExpiresAt: '2026-09-26T19:54:47.000Z', voucherUrl: 'https://payments.stripe.com/oxxo/test',
+    })).resolves.toBe('applied');
+    expect(r.applyVerifiedEvent).toHaveBeenCalledWith(expect.objectContaining({
+      eventType: 'payment_intent.requires_action', voucherExpiresAt: '2026-09-26T19:54:47.000Z',
+      voucherUrl: 'https://payments.stripe.com/oxxo/test', method: 'oxxo',
+    }));
+    await expect(processVerifiedStripeEvent(r, {
+      id: 'evt_bad', type: 'payment_intent.requires_action', created: 1790366087,
+      paymentIntentId: 'pi_card', amount: 28600, currency: 'mxn', method: 'card',
+    })).resolves.toBe('rejected');
+  });
 });

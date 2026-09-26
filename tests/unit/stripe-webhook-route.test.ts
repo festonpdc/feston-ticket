@@ -38,6 +38,36 @@ describe('Stripe webhook route', () => {
     expect(rpc).toHaveBeenCalledWith('apply_stripe_payment_event', expect.objectContaining({ p_event_type: 'payment_intent.payment_failed' }));
   });
 
+  it('extracts signed OXXO voucher details from requires_action', async () => {
+    rpc.mockResolvedValue({ data: { status: 'applied', payment_status: 'awaiting_cash' }, error: null });
+    const event = { id: 'evt_oxxo', type: 'payment_intent.requires_action', created: 1790366087, data: { object: {
+      id: 'pi_oxxo', amount: 28600, currency: 'mxn', payment_method_types: ['oxxo'],
+      next_action: { type: 'oxxo_display_details', oxxo_display_details: {
+        expires_after: 1790452487, hosted_voucher_url: 'https://payments.stripe.com/oxxo/test',
+      } },
+    } } };
+    const { applyVerifiedStripeEvent } = await import('../../apps/web/app/api/webhooks/stripe/route');
+    await expect(applyVerifiedStripeEvent(event as never, { rpc } as never)).resolves.toBe('applied');
+    expect(rpc).toHaveBeenCalledWith('apply_stripe_payment_event', expect.objectContaining({
+      p_event_type: 'payment_intent.requires_action', p_method: 'oxxo',
+      p_voucher_expires_at: '2026-09-26T19:54:47.000Z',
+      p_voucher_url: 'https://payments.stripe.com/oxxo/test',
+    }));
+  });
+
+  it('normalizes OXXO cancellation without voucher data', async () => {
+    rpc.mockResolvedValue({ data: { status: 'applied', payment_status: 'cancelled' }, error: null });
+    const event = { id: 'evt_cancel', type: 'payment_intent.canceled', created: 1790366087, data: { object: {
+      id: 'pi_oxxo', amount: 28600, currency: 'mxn', payment_method_types: ['oxxo'],
+    } } };
+    const { applyVerifiedStripeEvent } = await import('../../apps/web/app/api/webhooks/stripe/route');
+    await expect(applyVerifiedStripeEvent(event as never, { rpc } as never)).resolves.toBe('applied');
+    expect(rpc).toHaveBeenCalledWith('apply_stripe_payment_event', expect.objectContaining({
+      p_event_type: 'payment_intent.canceled', p_method: 'oxxo',
+      p_voucher_expires_at: null, p_voucher_url: null,
+    }));
+  });
+
   it('returns a retryable server error when the financial bridge fails', async () => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     rpc.mockResolvedValue({ data: null, error: {

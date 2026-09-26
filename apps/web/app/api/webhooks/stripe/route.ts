@@ -69,16 +69,23 @@ function logRpcError(error: SupabaseRpcError, context: {
 }
 
 export async function applyVerifiedStripeEvent(event: VerifiedStripeEvent, db: ReturnType<typeof createAdminClient>) {
-    if (!['payment_intent.succeeded', 'payment_intent.payment_failed', 'payment_intent.processing'].includes(event.type)) return 'ignored' as const;
-    const intent = event.data.object as { id?: string; amount?: number; currency?: string; payment_method_types?: string[]; metadata?: { order_id?: unknown } };
+    if (!['payment_intent.succeeded', 'payment_intent.payment_failed', 'payment_intent.processing', 'payment_intent.requires_action', 'payment_intent.canceled'].includes(event.type)) return 'ignored' as const;
+    const intent = event.data.object as { id?: string; amount?: number; currency?: string; payment_method_types?: string[]; metadata?: { order_id?: unknown }; next_action?: { type?: string; oxxo_display_details?: { expires_after?: number; hosted_voucher_url?: string | null } } };
     if (!intent.id || typeof intent.amount !== 'number' || typeof intent.currency !== 'string') throw new Error('invalid_payment_intent');
     const method = intent.payment_method_types?.includes('oxxo') ? 'oxxo' : 'card';
+    const details = event.type === 'payment_intent.requires_action' && method === 'oxxo' && intent.next_action?.type === 'oxxo_display_details'
+      ? intent.next_action.oxxo_display_details : undefined;
+    const voucherExpiresAt = details?.expires_after && Number.isSafeInteger(details.expires_after)
+      ? new Date(details.expires_after * 1000).toISOString() : undefined;
+    const voucherUrl = typeof details?.hosted_voucher_url === 'string' ? details.hosted_voucher_url : undefined;
     const repository = {
       applyVerifiedEvent: async (input) => {
         const result = await db.rpc('apply_stripe_payment_event' as never, {
           p_provider_event_id: input.eventId, p_provider_payment_id: input.providerPaymentId,
           p_event_type: input.eventType, p_amount: input.amount, p_currency: input.currency,
           p_method: input.method, p_provider_event_created_at: input.providerEventCreatedAt,
+          p_voucher_expires_at: input.voucherExpiresAt ?? null,
+          p_voucher_url: input.voucherUrl ?? null,
         } as never);
         if (result.error) {
           logRpcError(result.error, {
@@ -98,6 +105,8 @@ export async function applyVerifiedStripeEvent(event: VerifiedStripeEvent, db: R
     const result = await processVerifiedStripeEvent(repository, {
       id: event.id, type: event.type, created: event.created, paymentIntentId: intent.id,
       amount: intent.amount, currency: intent.currency, method,
+      ...(voucherExpiresAt ? { voucherExpiresAt } : {}),
+      ...(voucherUrl ? { voucherUrl } : {}),
     });
     return result;
 }

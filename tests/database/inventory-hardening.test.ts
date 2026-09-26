@@ -27,6 +27,14 @@ function suite(name:string,url?:string) {
       };
       return {providerPaymentId,reservedUntil:order.reserved_until,apply};
     }
+    async function oxxoPayment(orderId:string, providerPaymentId=`pi_${randomUUID().replaceAll('-','')}`) {
+      await db.query(`insert into public.payments(organization_id,order_id,provider,provider_payment_id,method,status,amount,currency)
+        select organization_id,id,'stripe',$2,'oxxo','pending',total,currency from public.orders where id=$1`,[orderId,providerPaymentId]);
+      const apply=async(eventId:string,eventType:string,expiresAt:string|null=null,url:string|null=null)=>(await db.query<{value:{status:string;reason?:string;payment_status?:string}}>(`select public.apply_stripe_payment_event(
+        $1,$2,$3,1500,'USD','oxxo',clock_timestamp(),$4::timestamptz,$5
+      ) value`,[eventId,providerPaymentId,eventType,expiresAt,url])).rows[0]!.value;
+      return {providerPaymentId,apply};
+    }
     async function issuanceManifest(orderId:string) {
       const items=(await db.query<{id:string;quantity:number}>('select id,quantity from public.order_items where order_id=$1 order by id',[orderId])).rows;
       const tokens:string[]=[];
@@ -296,20 +304,55 @@ function suite(name:string,url?:string) {
       expect((await db.query('select status from public.orders where id=$1',[oldOrder])).rows[0]!.status).toBe('pending_payment');
       expect((await db.query("select coalesce(sum(i.quantity),0)::text used from public.order_items i join public.orders o on o.id=i.order_id where o.event_id=$1 and o.status='paid'",[f.event])).rows[0]!.used).toBe('1');
     });
-    it('preserves OXXO voucher processing and later success',async()=>{
-      const reservation=await reserve(db,f,1);
-      const provider=`pi_${randomUUID().replaceAll('-','')}`;
-      await db.query(`insert into public.payments(organization_id,order_id,provider,provider_payment_id,method,status,amount,currency)
-        select organization_id,id,'stripe',$2,'oxxo','pending',total,currency from public.orders where id=$1`,[reservation.order_id,provider]);
-      const processing=(await db.query<{value:{status:string}}>(`select public.apply_stripe_payment_event(
-        'evt_oxxo_processing',$1,'payment_intent.processing',1500,'USD','oxxo',now(),now()+interval '1 day','https://pay.example.invalid/voucher'
-      ) value`,[provider])).rows[0]!.value;
-      expect(processing.status).toBe('applied');
-      const success=(await db.query<{value:{status:string;payment_status:string}}>(`select public.apply_stripe_payment_event(
-        'evt_oxxo_success',$1,'payment_intent.succeeded',1500,'USD','oxxo',now()+interval '1 hour'
-      ) value`,[provider])).rows[0]!.value;
-      expect(success).toMatchObject({status:'applied',payment_status:'paid'});
+    it('applies an OXXO voucher atomically, occupies inventory and later succeeds',async()=>{
+      const reservation=await reserve(db,f,1);const oxxo=await oxxoPayment(reservation.order_id);
+      const expiry=(await db.query<{value:string}>("select (clock_timestamp()+interval '1 day')::text value")).rows[0]!.value;
+      expect(await oxxo.apply('evt_oxxo_voucher','payment_intent.requires_action',expiry,'https://pay.example.invalid/voucher')).toMatchObject({status:'applied',payment_status:'awaiting_cash'});
+      expect(await oxxo.apply('evt_oxxo_voucher','payment_intent.requires_action',expiry,'https://pay.example.invalid/voucher')).toMatchObject({status:'duplicate'});
+      expect((await db.query('select status,voucher_expires_at=$2::timestamptz matches from public.payments where order_id=$1',[reservation.order_id,expiry])).rows[0]).toMatchObject({status:'awaiting_cash',matches:true});
+      expect((await db.query('select status,reserved_until=$2::timestamptz matches from public.orders where id=$1',[reservation.order_id,expiry])).rows[0]).toMatchObject({status:'pending_payment',matches:true});
+      expect(Number((await availability(db,f)).find(r=>r.ticket_type_id===f.type)!.available_quantity)).toBe(99);
+      expect((await db.query('select count(*)::int count from public.tickets where order_id=$1',[reservation.order_id])).rows[0]!.count).toBe(0);
+      expect(await oxxo.apply('evt_oxxo_success','payment_intent.succeeded')).toMatchObject({status:'applied',payment_status:'paid'});
+      expect(await oxxo.apply('evt_oxxo_success','payment_intent.succeeded')).toMatchObject({status:'duplicate'});
       expect((await db.query('select status from public.orders where id=$1',[reservation.order_id])).rows[0]!.status).toBe('paid');
+      expect(await oxxo.apply('evt_oxxo_stale_failed','payment_intent.payment_failed')).toMatchObject({status:'rejected',reason:'payment_already_paid'});
+      expect(await oxxo.apply('evt_oxxo_stale_cancel','payment_intent.canceled')).toMatchObject({status:'rejected',reason:'payment_already_paid'});
+    });
+    it('rejects invalid OXXO voucher URLs and expiration timestamps',async()=>{
+      const reservation=await reserve(db,f,1);const oxxo=await oxxoPayment(reservation.order_id);
+      const future=(await db.query<{value:string}>("select (clock_timestamp()+interval '1 day')::text value")).rows[0]!.value;
+      const past=(await db.query<{value:string}>("select (clock_timestamp()-interval '1 minute')::text value")).rows[0]!.value;
+      expect(await oxxo.apply('evt_bad_url','payment_intent.requires_action',future,'http://unsafe.invalid/voucher')).toMatchObject({status:'rejected',reason:'invalid_voucher'});
+      expect(await oxxo.apply('evt_past','payment_intent.requires_action',past,'https://pay.example.invalid/voucher')).toMatchObject({status:'rejected',reason:'invalid_voucher'});
+      expect((await db.query('select status from public.payments where order_id=$1',[reservation.order_id])).rows[0]!.status).toBe('pending');
+    });
+    it('expires OXXO payment and order atomically, releases occupancy and reconciles late success',async()=>{
+      const reservation=await reserve(db,f,1);const oxxo=await oxxoPayment(reservation.order_id);
+      const snapshot=(await db.query('select unit_price,subtotal from public.order_items where order_id=$1',[reservation.order_id])).rows[0]!;
+      const expiry=(await db.query<{value:string}>("select (clock_timestamp()+interval '1 day')::text value")).rows[0]!.value;
+      await oxxo.apply('evt_expiring_voucher','payment_intent.requires_action',expiry,'https://pay.example.invalid/voucher');
+      await db.query("select set_config('private.allow_oxxo_reservation_extension','on',true)");
+      await db.query("update public.orders set reserved_until=created_at+interval '1 millisecond' where id=$1",[reservation.order_id]);
+      await db.query("update public.payments set voucher_expires_at=created_at+interval '1 millisecond' where order_id=$1",[reservation.order_id]);
+      expect(Number((await db.query('select public.expire_reservations() count')).rows[0]!.count)).toBe(1);
+      expect((await db.query('select status from public.orders where id=$1',[reservation.order_id])).rows[0]!.status).toBe('expired');
+      expect((await db.query('select status from public.payments where order_id=$1',[reservation.order_id])).rows[0]!.status).toBe('expired');
+      expect(Number((await availability(db,f)).find(r=>r.ticket_type_id===f.type)!.available_quantity)).toBe(100);
+      expect((await db.query('select unit_price,subtotal from public.order_items where order_id=$1',[reservation.order_id])).rows[0]).toEqual(snapshot);
+      expect(await oxxo.apply('evt_late_success','payment_intent.succeeded')).toMatchObject({status:'reconciliation_required',reason:'order_state'});
+      expect((await db.query('select status from public.payments where order_id=$1',[reservation.order_id])).rows[0]!.status).toBe('expired');
+      expect((await db.query('select count(*)::int count from public.tickets where order_id=$1',[reservation.order_id])).rows[0]!.count).toBe(0);
+    });
+    it.each([['payment_intent.canceled','cancelled'],['payment_intent.payment_failed','failed']] as const)('closes OXXO lifecycle for %s',async(eventType,paymentStatus)=>{
+      const reservation=await reserve(db,f,1);const oxxo=await oxxoPayment(reservation.order_id);
+      const expiry=(await db.query<{value:string}>("select (clock_timestamp()+interval '1 day')::text value")).rows[0]!.value;
+      await oxxo.apply(`evt_voucher_${paymentStatus}`,'payment_intent.requires_action',expiry,'https://pay.example.invalid/voucher');
+      expect(await oxxo.apply(`evt_${paymentStatus}`,eventType)).toMatchObject({status:'applied',payment_status:paymentStatus});
+      expect(await oxxo.apply(`evt_${paymentStatus}`,eventType)).toMatchObject({status:'duplicate'});
+      expect((await db.query('select status from public.orders where id=$1',[reservation.order_id])).rows[0]!.status).toBe('expired');
+      expect(Number((await availability(db,f)).find(r=>r.ticket_type_id===f.type)!.available_quantity)).toBe(100);
+      expect((await db.query('select count(*)::int count from public.tickets where order_id=$1',[reservation.order_id])).rows[0]!.count).toBe(0);
     });
     it('rejects ticket issuance for an unpaid order',async()=>{
       const reservation=await reserve(db,f,1);

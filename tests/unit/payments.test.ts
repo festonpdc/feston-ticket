@@ -6,6 +6,8 @@ describe('Stripe payment foundation', () => {
     expect(mapStripeStatus('succeeded', 'card')).toBe('paid');
     expect(mapStripeStatus('processing', 'card')).toBe('processing');
     expect(mapStripeStatus('processing', 'oxxo')).toBe('awaiting_cash');
+    expect(mapStripeStatus('requires_action', 'oxxo')).toBe('awaiting_cash');
+    expect(mapStripeStatus('requires_action', 'card')).toBe('pending');
     expect(mapStripeStatus('requires_payment_method', 'card')).toBe('pending');
   });
 });
