@@ -1,5 +1,6 @@
 import 'server-only';
 import crypto from 'node:crypto';
+import {publicAppUrl} from './public-app-url';
 
 const secret = () => {
   const value=process.env.TICKET_QR_SECRET;
@@ -40,9 +41,5 @@ export function ticketManifest(items:Array<{id:string;quantity:number}>) {
 }
 
 export function ticketPublicUrl(token:string) {
-  const configured=process.env.APP_URL;
-  if(!configured) throw new Error('APP_URL is required');
-  const base=new URL(configured);
-  if(base.protocol!=='https:' && !(base.protocol==='http:'&&base.hostname==='localhost')) throw new Error('APP_URL is invalid');
-  return new URL(`/t/${encodeURIComponent(token)}`,base).toString();
+  return publicAppUrl(`/t/${encodeURIComponent(token)}`);
 }

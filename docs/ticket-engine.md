@@ -12,7 +12,7 @@ successful payment.
 The server derives each opaque `fst1_` token with HMAC-SHA-256 from a dedicated
 `TICKET_QR_SECRET` and the deterministic per-unit ticket identity. Only the
 SHA-256 token hash is sent to and stored in PostgreSQL. The raw token exists
-only while producing the authorized response and QR URL. `APP_URL` is the sole
+only while producing the authorized response and QR URL. `PUBLIC_APP_URL` is the sole
 origin used to build `/t/<opaque-token>` links; request `Host` headers are not
 trusted. The same `TICKET_QR_SECRET` must be configured consistently in every
 runtime so retries can regenerate the same token.

@@ -30,6 +30,16 @@ It is read-only, works across devices, cannot authorize payment operations, and
 can be rotated globally through `TICKET_QR_SECRET`. The capability route reads
 only the paid order and its tickets and performs no check-in or mutation.
 
+All URLs that leave the runtime use the mandatory HTTPS `PUBLIC_APP_URL`.
+`APP_URL` remains reserved for runtime callbacks such as the local Stripe
+return. External email and QR links never fall back to localhost or a request
+Host header.
+
+The first accepted delivery remains immutable as `tickets_initial`, sequence
+`1`. A future controlled resend should claim a separate purpose such as
+`tickets_manual` with the next sequence and its own provider idempotency key;
+it must never rewrite or reopen the existing sent delivery.
+
 The operator command `pnpm send-order-tickets-email` is dry-run by default and
 targets exactly one organization/order supplied by flags or the ignored local
 operator environment. It prints only a masked recipient and non-sensitive

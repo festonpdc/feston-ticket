@@ -16,7 +16,7 @@ function fakeDb(claim:{status:string;delivery_id?:string;recipient?:string}={sta
 }
 
 describe('transactional email delivery foundation',()=>{
-  beforeEach(()=>{process.env.EMAIL_FROM='Fest-On <tickets@example.test>';process.env.EMAIL_REPLY_TO='help@example.test';process.env.APP_URL='https://tickets.example.test';process.env.TICKET_QR_SECRET='test-ticket-secret-that-is-long-enough-for-hmac'});
+  beforeEach(()=>{process.env.EMAIL_FROM='Fest-On <tickets@example.test>';process.env.EMAIL_REPLY_TO='help@example.test';process.env.PUBLIC_APP_URL='https://tickets.example.test';process.env.TICKET_QR_SECRET='test-ticket-secret-that-is-long-enough-for-hmac'});
   afterEach(()=>vi.restoreAllMocks());
   it('loads the recipient from DB and persists the accepted provider message id',async()=>{
     const {db,rpc}=fakeDb();let request:EmailRequest|undefined;
@@ -27,6 +27,9 @@ describe('transactional email delivery foundation',()=>{
     expect(request?.subject).toBe('Tus entradas para Fiesta de Disfraces están listas');
     expect(request?.html).toContain('TUS ENTRADAS');expect(request?.text).toContain('VER MIS ENTRADAS:');
     expect((request?.html.match(/VER ENTRADA</g)??[])).toHaveLength(3);expect(request?.html).toContain('1 HOMBRE · 2 MUJERES');
+    expect(request?.html).toContain('https://tickets.example.test/entradas/');
+    expect((request?.html.match(/https:\/\/tickets\.example\.test\/t\//g)??[])).toHaveLength(3);
+    expect(`${request?.html}${request?.text}`).not.toContain('localhost');
     expect(rpc).toHaveBeenLastCalledWith('finish_order_ticket_email_delivery',expect.objectContaining({p_success:true,p_provider_message_id:'message-1'}));
   });
   it('sanitizes provider failure and changes only the delivery record',async()=>{
