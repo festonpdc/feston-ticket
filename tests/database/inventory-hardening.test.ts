@@ -146,6 +146,11 @@ function suite(name:string,url?:string) {
     it('has only the approved public RPCs with fixed search_path and minimal grants',async()=>{
       const protection=(await db.query("select relrowsecurity,relforcerowsecurity from pg_class where oid='private.reservation_requests'::regclass")).rows[0]!;
       expect(protection).toEqual({relrowsecurity:true,relforcerowsecurity:true});
+      const releaseProtection=(await db.query("select relrowsecurity,relforcerowsecurity from pg_class where oid='public.pricing_releases'::regclass")).rows[0]!;
+      expect(releaseProtection).toEqual({relrowsecurity:true,relforcerowsecurity:true});
+      for(const role of ['anon','authenticated']) {
+        expect((await db.query("select has_table_privilege($1,'public.pricing_releases','select') as read,has_table_privilege($1,'public.pricing_releases','insert') as write",[role])).rows[0]).toEqual({read:false,write:false});
+      }
       const rows=(await db.query(`select p.proname,p.prosecdef,p.proconfig,
         pg_get_userbyid(p.proowner) as owner,
         has_function_privilege('anon',p.oid,'execute') as anon,
@@ -180,7 +185,56 @@ function suite(name:string,url?:string) {
       expect(paid).toEqual(pending);
       const payload=JSON.stringify(paid);
       for(const secret of [key,f.customer,first.order_id,'private@example.invalid','Private new name','+521234567890']) expect(payload).not.toContain(secret);
-      expect(Object.keys(paid[0]!).sort()).toEqual(['available_quantity','currency','name','price','sales_open','status','ticket_type_id']);
+      expect(Object.keys(paid[0]!).sort()).toEqual(['available_quantity','commercial_occupancy','currency','display_price_label','name','price','release_label','release_sequence','sales_open','status','ticket_type_id']);
+    });
+    it('uses one release price for the whole reservation and advances only the next reservation',async()=>{
+      await db.query('update public.ticket_types set capacity=null where id=$1',[f.type]);
+      await db.query(`insert into public.pricing_releases(organization_id,event_id,ticket_type_id,sequence,label,threshold,charge_amount,charge_currency,display_label) values
+        ($1,$2,$3,1,'FIRST',100,2500,'USD','$25'),($1,$2,$3,2,'SECOND',null,3500,'USD','$35')`,[f.org,f.event,f.type]);
+      expect((await reserve(db,f,1)).total).toBe(2500);
+      await db.exec('savepoint release_setup');await db.exec('rollback to savepoint release_setup');
+      await historicalOrder(db,f,97,'paid',false);
+      const crossing=await reserve(db,f,5);expect(crossing.total).toBe(12500);
+      const item=(await db.query('select quantity,unit_price,subtotal from public.order_items where order_id=$1',[crossing.order_id])).rows[0]!;
+      expect(item).toMatchObject({quantity:5,unit_price:2500,subtotal:12500});
+      await db.query('update public.pricing_releases set charge_amount=9999 where organization_id=$1 and sequence=1',[f.org]);
+      expect((await db.query('select unit_price,subtotal from public.order_items where order_id=$1',[crossing.order_id])).rows[0]).toEqual({unit_price:2500,subtotal:12500});
+      expect((await reserve(db,f,1)).total).toBe(3500);
+    });
+    it('uses the fixed Fest-On women equivalence with no split or FX lookup',async()=>{
+      await db.query("update public.ticket_types set capacity=null,price=2000,currency='MXN' where id=$1",[f.type]);
+      await db.query(`insert into public.pricing_releases(organization_id,event_id,ticket_type_id,sequence,label,threshold,charge_amount,charge_currency,display_label) values
+        ($1,$2,$3,1,'FIRST',100,1800,'MXN','USD $1'),($1,$2,$3,2,'REST',null,3600,'MXN','USD $2')`,[f.org,f.event,f.type]);
+      for(let index=0;index<9;index++) await reserve(db,f,10);
+      await reserve(db,f,8);
+      const crossing=await reserve(db,f,5);
+      expect(crossing).toMatchObject({total:9000,currency:'MXN'});
+      expect((await db.query('select quantity,unit_price,subtotal,currency::text from public.order_items where order_id=$1',[crossing.order_id])).rows[0]).toEqual({quantity:5,unit_price:1800,subtotal:9000,currency:'MXN'});
+      expect(await reserve(db,f,1)).toMatchObject({total:3600,currency:'MXN'});
+    });
+    it('loads the exact Fest-On commercial release amounts without dynamic FX',async()=>{
+      const rows=(await db.query(`select t.name,r.sequence,r.threshold,r.charge_amount,r.charge_currency::text,r.display_label
+        from public.pricing_releases r join public.ticket_types t on t.id=r.ticket_type_id
+        where r.organization_id='f3000000-0000-4000-8000-000000000001' order by t.name,r.sequence`)).rows;
+      expect(rows).toEqual([
+        {name:'HOMBRES',sequence:1,threshold:100,charge_amount:25000,charge_currency:'MXN',display_label:'$250 MXN'},
+        {name:'HOMBRES',sequence:2,threshold:200,charge_amount:35000,charge_currency:'MXN',display_label:'$350 MXN'},
+        {name:'HOMBRES',sequence:3,threshold:300,charge_amount:45000,charge_currency:'MXN',display_label:'$450 MXN'},
+        {name:'HOMBRES',sequence:4,threshold:null,charge_amount:50000,charge_currency:'MXN',display_label:'$500 MXN'},
+        {name:'MUJERES',sequence:1,threshold:100,charge_amount:1800,charge_currency:'MXN',display_label:'USD $1'},
+        {name:'MUJERES',sequence:2,threshold:null,charge_amount:3600,charge_currency:'MXN',display_label:'USD $2'}
+      ]);
+    });
+    it('counts active and paid occupancy once, releases expired holds and ignores disabled releases',async()=>{
+      await db.query('update public.ticket_types set capacity=null where id=$1',[f.type]);
+      await db.query(`insert into public.pricing_releases(organization_id,event_id,ticket_type_id,sequence,label,threshold,charge_amount,charge_currency,display_label,enabled) values
+        ($1,$2,$3,1,'DISABLED',100,1000,'USD','$10',false),($1,$2,$3,2,'FIRST',100,2500,'USD','$25',true),($1,$2,$3,3,'REST',null,3500,'USD','$35',true)`,[f.org,f.event,f.type]);
+      const active=await historicalOrder(db,f,100,'pending_payment',false);expect((await reserve(db,f,1)).total).toBe(3500);
+      await db.query("update public.orders set reserved_until=now()-interval '1 second' where id=$1",[active]);await db.exec('select public.expire_reservations()');
+      expect((await reserve(db,f,1)).total).toBe(2500);
+      const paid=await historicalOrder(db,f,99,'paid',false);expect((await reserve(db,f,1)).total).toBe(3500);
+      expect((await db.query('select commercial_occupancy from public.ticket_availability($1,$2) where ticket_type_id=$3',[f.org,f.event,f.type])).rows[0]!.commercial_occupancy).toBe(102);
+      expect((await db.query('select count(*)::int count from public.order_items where order_id=$1',[paid])).rows[0]!.count).toBe(1);
     });
     it('two different types still share the event cap, including reversed payload order',async()=>{
       await db.query('update public.events set capacity=3 where id=$1',[f.event]);

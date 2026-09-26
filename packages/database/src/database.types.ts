@@ -519,7 +519,7 @@ cancel_reservation: { Args: { p_organization_id: string; p_order_id: string }; R
 confirm_reserved_order: { Args: { p_organization_id: string; p_order_id: string }; Returns: Json };
 expire_reservations: { Args: { p_before?: string; p_limit?: number }; Returns: number };
 reserve_tickets: { Args: { p_organization_id: string; p_event_id: string; p_customer_id: string; p_items: Json; p_idempotency_key: string }; Returns: Json };
-ticket_availability: { Args: { p_organization_id: string; p_event_id: string }; Returns: { ticket_type_id: string; name: string; price: number; currency: string; status: Database['public']['Enums']['ticket_type_status']; available_quantity: number; sales_open: boolean }[] };
+ticket_availability: { Args: { p_organization_id: string; p_event_id: string }; Returns: { ticket_type_id: string; name: string; price: number; currency: string; status: Database['public']['Enums']['ticket_type_status']; available_quantity: number | null; sales_open: boolean; release_sequence: number | null; release_label: string | null; display_price_label: string | null; commercial_occupancy: number }[] };
 }; Enums: {
 audit_event_type: "order_created" | "payment_confirmed" | "ticket_issued" | "ticket_redeemed" | "ticket_redeem_attempt" | "ticket_resent" | "complimentary_created" | "ticket_cancelled" | "refund" | "inventory_reserved" | "reservation_expired" | "reservation_cancelled" | "order_confirmed";
 event_status: "draft" | "published" | "sales_closed" | "completed" | "cancelled";

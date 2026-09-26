@@ -168,7 +168,7 @@ function suite(name: string, url?: string) {
       for (const role of ['anon','authenticated']) {
         await db.exec(`set local role ${role}`);
         const rows = await availability(db,f);
-        expect(Object.keys(rows[0]!).sort()).toEqual(['available_quantity','currency','name','price','sales_open','status','ticket_type_id']);
+        expect(Object.keys(rows[0]!).sort()).toEqual(['available_quantity','commercial_occupancy','currency','display_price_label','name','price','release_label','release_sequence','sales_open','status','ticket_type_id']);
         await reject(() => reserve(db,f),'42501');
         await reject(() => command('cancel_reservation',order.order_id),'42501');
         await reject(() => command('confirm_reserved_order',order.order_id),'42501');
