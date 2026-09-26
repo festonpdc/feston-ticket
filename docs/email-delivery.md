@@ -36,9 +36,10 @@ return. External email and QR links never fall back to localhost or a request
 Host header.
 
 The first accepted delivery remains immutable as `tickets_initial`, sequence
-`1`. A future controlled resend should claim a separate purpose such as
-`tickets_manual` with the next sequence and its own provider idempotency key;
-it must never rewrite or reopen the existing sent delivery.
+`1`. A controlled resend uses `tickets_manual` and an explicit positive
+sequence, with its own provider idempotency key; it never rewrites or reopens
+the existing sent delivery. The first resend is sequence `1`, and a later
+resend requires the operator to deliberately request sequence `2`.
 
 The operator command `pnpm send-order-tickets-email` is dry-run by default and
 targets exactly one organization/order supplied by flags or the ignored local
@@ -46,3 +47,19 @@ operator environment. It prints only a masked recipient and non-sensitive
 state. A real provider call requires the explicit `--send` flag. The command
 delegates to `sendOrderTicketsEmail`; it does not accept a recipient override
 and does not expose an HTTP endpoint.
+
+With `EMAIL_DELIVERY_ORGANIZATION_ID` and `EMAIL_DELIVERY_ORDER_ID` configured
+in the ignored operator environment, the first manual resend is previewed with:
+
+```sh
+pnpm send-order-tickets-email --purpose tickets_manual --sequence 1
+```
+
+The corresponding real operation requires the additional explicit flag:
+
+```sh
+pnpm send-order-tickets-email --purpose tickets_manual --sequence 1 --send
+```
+
+Repeating that exact send returns `already_sent`; it does not send a second
+message. No recipient override is supported.

@@ -6,9 +6,12 @@ import { emailTicketAccessUrl } from './email-ticket-access';
 import { renderTicketEmail,ticketEmailSubject } from './ticket-email-template';
 
 type DbLike=ReturnType<typeof createAdminClient>;
+export type TicketEmailDeliveryIdentity={purpose:'tickets_initial'|'tickets_manual';sequence:number};
+const initialDelivery:TicketEmailDeliveryIdentity={purpose:'tickets_initial',sequence:1};
 const safeCode=(error:unknown)=>error instanceof Error&&/^[a-z0-9_]{1,80}$/.test(error.message)?error.message:'provider_error';
 
-export async function sendOrderTicketsEmail(organizationId:string,orderId:string,deps?:{db?:DbLike;provider?:EmailProvider}){
+export async function sendOrderTicketsEmail(organizationId:string,orderId:string,identity:TicketEmailDeliveryIdentity=initialDelivery,deps?:{db?:DbLike;provider?:EmailProvider}){
+  if(identity.sequence<1||!Number.isSafeInteger(identity.sequence)||(identity.purpose==='tickets_initial'&&identity.sequence!==1))throw new Error('invalid_delivery_identity');
   const db=deps?.db??createAdminClient();
   const provider=deps?.provider??new ResendEmailProvider();
   const [orderResult,itemsResult,ticketsResult]=await Promise.all([
@@ -29,7 +32,7 @@ export async function sendOrderTicketsEmail(organizationId:string,orderId:string
   if(eventResult.error||!eventResult.data||typesResult.error)return {status:'rejected',reason:'event_not_found'} as const;
   const locationResult=await db.from('locations').select('name').eq('organization_id',organizationId).eq('id',eventResult.data.location_id).maybeSingle();
   if(locationResult.error||!locationResult.data)return {status:'rejected',reason:'event_not_found'} as const;
-  const claim=await db.rpc('claim_order_ticket_email_delivery' as never,{p_organization_id:organizationId,p_order_id:orderId} as never);
+  const claim=await db.rpc('claim_order_ticket_email_delivery_controlled' as never,{p_organization_id:organizationId,p_order_id:orderId,p_purpose:identity.purpose,p_sequence:identity.sequence} as never);
   if(claim.error)throw new Error('delivery_claim_failed');
   const receipt=claim.data as {status:string;delivery_id?:string;recipient?:string};
   if(receipt.status!=='claimed')return {status:receipt.status} as const;
@@ -40,12 +43,12 @@ export async function sendOrderTicketsEmail(organizationId:string,orderId:string
   const createdAt=Date.parse(order.created_at);const accessUrl=emailTicketAccessUrl(organizationId,orderId,createdAt+365*24*60*60*1000);
   const rendered=renderTicketEmail({firstName:customerResult.data.full_name.trim().split(/\s+/)[0],eventName:eventResult.data.name,eventDate:new Intl.DateTimeFormat('es-MX',{day:'numeric',month:'long',year:'numeric',timeZone:eventResult.data.timezone}).format(new Date(eventResult.data.starts_at)).toUpperCase(),venue:locationResult.data.name,total:expected,summary,accessUrl,tickets:emailTickets});
   try{
-    const sent=await provider.send({to:receipt.recipient,from:required('EMAIL_FROM'),replyTo:required('EMAIL_REPLY_TO'),subject:ticketEmailSubject,html:rendered.html,text:rendered.text,idempotencyKey:`tickets_initial:${receipt.delivery_id}`});
-    const finish=await db.rpc('finish_order_ticket_email_delivery' as never,{p_delivery_id:receipt.delivery_id,p_success:true,p_provider_message_id:sent.messageId,p_error_code:null} as never);
+    const sent=await provider.send({to:receipt.recipient,from:required('EMAIL_FROM'),replyTo:required('EMAIL_REPLY_TO'),subject:ticketEmailSubject,html:rendered.html,text:rendered.text,idempotencyKey:`${identity.purpose}:${identity.sequence}:${receipt.delivery_id}`});
+    const finish=await db.rpc('finish_order_ticket_email_delivery_controlled' as never,{p_delivery_id:receipt.delivery_id,p_success:true,p_provider_message_id:sent.messageId,p_error_code:null} as never);
     if(finish.error)throw new Error('delivery_finish_failed');
     return {status:'sent',deliveryId:receipt.delivery_id} as const;
   }catch(error){
-    await db.rpc('finish_order_ticket_email_delivery' as never,{p_delivery_id:receipt.delivery_id,p_success:false,p_provider_message_id:null,p_error_code:safeCode(error)} as never);
+    await db.rpc('finish_order_ticket_email_delivery_controlled' as never,{p_delivery_id:receipt.delivery_id,p_success:false,p_provider_message_id:null,p_error_code:safeCode(error)} as never);
     return {status:'failed',deliveryId:receipt.delivery_id} as const;
   }
 }
