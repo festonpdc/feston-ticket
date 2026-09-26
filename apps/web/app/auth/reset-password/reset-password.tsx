@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import { createBrowserClient } from '@programita/database/browser';
-import { hasRecoveryIntent, validateNewPassword } from './recovery-core';
+import { hasRecoveryIntent, resolveRecoverySession, validateNewPassword } from './recovery-core';
 
 type State='verifying'|'ready'|'saving'|'success'|'invalid';
 
@@ -13,25 +13,13 @@ export function ResetPassword(){
     let active=true;
     const search=location.search,hash=location.hash;
     if(!hasRecoveryIntent(search,hash)){queueMicrotask(()=>{if(active)setState('invalid')});return()=>{active=false}}
-    const query=new URLSearchParams(search),tokenHash=query.get('token_hash');
-    const subscription=supabase.auth.onAuthStateChange((event,session)=>{
-      if(active&&event==='PASSWORD_RECOVERY'&&session){history.replaceState({},'',location.pathname);setState('ready')}
-    }).data.subscription;
     const verify=async()=>{
-      if(tokenHash&&query.get('type')==='recovery'){
-        const {error}=await supabase.auth.verifyOtp({token_hash:tokenHash,type:'recovery'});
-        if(!active)return;
-        history.replaceState({},'',location.pathname);
-        setState(error?'invalid':'ready');
-        return;
-      }
-      const {data,error}=await supabase.auth.getSession();
+      const valid=await resolveRecoverySession(supabase.auth,search,hash,()=>history.replaceState({},'',location.pathname));
       if(!active)return;
-      if(error||!data.session)setState('invalid');
-      else {history.replaceState({},'',location.pathname);setState('ready')}
+      setState(valid?'ready':'invalid');
     };
     void verify();
-    return()=>{active=false;subscription.unsubscribe()};
+    return()=>{active=false};
   },[supabase]);
 
   const submit=async(event:React.FormEvent)=>{
