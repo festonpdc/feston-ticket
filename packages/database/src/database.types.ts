@@ -516,6 +516,7 @@ Relationships: [
 };
 }; Views: { [_ in never]: never }; Functions: {
 cancel_reservation: { Args: { p_organization_id: string; p_order_id: string }; Returns: Json };
+check_in_ticket: { Args: { p_organization_id: string; p_event_id: string; p_token: string }; Returns: Json };
 confirm_reserved_order: { Args: { p_organization_id: string; p_order_id: string }; Returns: Json };
 expire_reservations: { Args: { p_before?: string; p_limit?: number }; Returns: number };
 reserve_tickets: { Args: { p_organization_id: string; p_event_id: string; p_customer_id: string; p_items: Json; p_idempotency_key: string }; Returns: Json };

@@ -158,14 +158,14 @@ function suite(name:string,url?:string) {
         has_function_privilege('service_role',p.oid,'execute') as service,
         exists(select 1 from aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) where grantee=0 and privilege_type='EXECUTE') as public_execute
         from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' order by p.proname`)).rows;
-      expect(rows.map(r=>r.proname)).toEqual(['apply_stripe_payment_event','cancel_reservation','claim_order_ticket_email_delivery','claim_order_ticket_email_delivery_controlled','confirm_reserved_order','expire_reservations','finish_order_ticket_email_delivery','finish_order_ticket_email_delivery_controlled','issue_tickets_for_paid_order','reconcile_stripe_payment_provider_id','reserve_tickets','ticket_availability']);
+      expect(rows.map(r=>r.proname)).toEqual(['apply_stripe_payment_event','cancel_reservation','check_in_ticket','claim_order_ticket_email_delivery','claim_order_ticket_email_delivery_controlled','confirm_reserved_order','expire_reservations','finish_order_ticket_email_delivery','finish_order_ticket_email_delivery_controlled','issue_tickets_for_paid_order','reconcile_stripe_payment_provider_id','reserve_tickets','ticket_availability']);
       for(const fn of rows) {
         expect(fn.prosecdef).toBe(true);
         expect(fn.proconfig).toContain(['apply_stripe_payment_event','reconcile_stripe_payment_provider_id'].includes(String(fn.proname))?'search_path=pg_catalog':'search_path=""');
         expect(['anon','authenticated','service_role']).not.toContain(fn.owner);
         expect(fn.anon).toBe(fn.proname==='ticket_availability');
-        expect(fn.authenticated).toBe(fn.proname==='ticket_availability');
-        expect(fn.service).toBe(true);expect(fn.public_execute).toBe(false);
+        expect(fn.authenticated).toBe(['ticket_availability','check_in_ticket'].includes(String(fn.proname)));
+        expect(fn.service).toBe(fn.proname!=='check_in_ticket');expect(fn.public_execute).toBe(false);
       }
       expect((await db.query("select to_regprocedure('public.reserve_tickets(uuid,uuid,uuid,jsonb)') as legacy")).rows[0]!.legacy).toBeNull();
       for(const role of ['anon','authenticated','service_role']) {
