@@ -48,6 +48,8 @@ describe('secure ticket delivery',()=>{
   });
   it('keeps the public token page read-only and free of PII',()=>{
     expect(publicTicket).toContain("eq('secure_token_hash',hash)");
+    expect(publicTicket).toContain('ticketPublicUrl(token)');
+    expect(publicTicket).toContain('<TicketQr url={publicUrl}/>');
     expect(publicTicket).not.toMatch(/\.insert\(|check_ins|customer|email|phone|stripe/i);
     expect(publicTicket).not.toMatch(/db\.from\([^)]*\)\.update\(/i);
   });
