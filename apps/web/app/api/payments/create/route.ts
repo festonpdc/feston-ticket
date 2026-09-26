@@ -2,6 +2,7 @@
 import { createAdminClient } from '@programita/database/admin';
 import { StripePaymentProvider } from '@programita/payments';
 import { verifyPaymentCapability } from '../../../../lib/payment-capability';
+import { publicAppUrl } from '../../../../lib/public-app-url';
 export const runtime = 'nodejs';
 const fail = (error: string, status = 400) => NextResponse.json({ error }, { status });
 export async function POST(req: Request) {
@@ -32,13 +33,6 @@ export async function POST(req: Request) {
   } catch { return fail('No pudimos preparar el pago', 500); }
 }
 function paymentReturnUrl() {
-  const configured = process.env.APP_URL;
-  if (!configured) {
-    if (process.env.NODE_ENV === 'production') throw new Error('APP_URL is required');
-    return 'http://localhost:3000/fiesta-de-disfraces?payment_return=1#entradas';
-  }
-  const url = new URL(configured);
-  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && url.hostname === 'localhost')) throw new Error('APP_URL is invalid');
-  return new URL('/fiesta-de-disfraces?payment_return=1#entradas', url).toString();
+  return publicAppUrl('/fiesta-de-disfraces?payment_return=1#entradas');
 }
 
